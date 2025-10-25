@@ -97,47 +97,9 @@ jobs:
 
       - name: 📅 Display gardening scheduling decision
         run: |
-          if [ -f tmp/posting_schedule.json ]; then
-            SHOULD_POST=$(jq -r '.should_post_now' tmp/posting_schedule.json)
-            PRIORITY=$(jq -r '.next_optimal_slot.priority' tmp/posting_schedule.json)
-            CONTENT_TYPE=$(jq -r '.next_optimal_slot.content_type' tmp/posting_schedule.json)
-            CURRENT_TIME=$(jq -r '.current_time' tmp/posting_schedule.json)
-            
-            echo "📅 Current Time: $CURRENT_TIME"
-            echo "🎯 Should Post: $SHOULD_POST"
-            echo "⭐ Priority: $PRIORITY"
-            echo "🌱 Content Type: $CONTENT_TYPE"
-            
-            # Set outputs for next steps
-            echo "should_post=$SHOULD_POST" >> $GITHUB_OUTPUT
-            echo "priority=$PRIORITY" >> $GITHUB_OUTPUT
-            echo "content_type=$CONTENT_TYPE" >> $GITHUB_OUTPUT
-            echo "current_time=$CURRENT_TIME" >> $GITHUB_OUTPUT
-          else
-            echo "⚠️ Schedule file not found, checking manually..."
-            # Fallback to manual check
-            python -c "
-            from datetime import datetime
-            import pytz
-            tz = pytz.timezone('US/Eastern')
-            current = datetime.now(tz)
-            weekday = current.weekday()
-            hour = current.hour
-            
-            # Weekend check - allow weekend posts
-            should_post = weekday >= 5
-            priority = 'medium' if should_post else 'low'
-            
-            with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                f.write(f'should_post={str(should_post).lower()}\n')
-                f.write(f'priority={priority}\n')
-                f.write(f'current_time={current.strftime(\"%Y-%m-%d %H:%M EST\")}\n')
-            "
-            
-            echo "🎯 Should Post: ${{ steps.schedule_check.outputs.should_post }}"
-            echo "⭐ Priority: ${{ steps.schedule_check.outputs.priority }}"
-          fi
-          echo "🌱 Audience: Gardeners planning their day"
+          echo "📅 Current Time: ${{ steps.schedule_check.outputs.current_time }}"
+          echo "🎯 Should Post: ${{ steps.schedule_check.outputs.should_post }}"
+          echo "⭐ Priority: ${{ steps.schedule_check.outputs.priority }}"
 
       - name: ⏸️ Skip if not optimal gardening time
         if: steps.schedule_check.outputs.should_post != 'true'

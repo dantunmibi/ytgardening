@@ -95,6 +95,11 @@ jobs:
           # Use the sophisticated gardening scheduler
           python .github/scripts/optimal_scheduler.py
 
+          python -c "
+          from datetime import datetime
+          import os
+          import pytz
+
           ignore_schedule = '${{ github.event.inputs.ignore_schedule }}' == 'true'
           
           if ignore_schedule:

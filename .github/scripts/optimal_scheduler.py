@@ -108,8 +108,8 @@ if ignore_schedule:
     print('⚠️ Schedule check BYPASSED by user input')
     should_post = True
     priority = 'manual'
-elif weekday in optimal_times:
-    if hour in optimal_times[weekday]:
+elif weekday in OPTIMAL_SCHEDULE:
+    if hour in OPTIMAL_SCHEDULE[weekday]:
         should_post = True
         priority = 'highest' if (weekday == 1 and hour == 13) else 'high'
         print(f'✅ Within optimal window: {current.strftime("%A %I:%M %p WAT")}')

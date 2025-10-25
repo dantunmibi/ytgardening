@@ -102,6 +102,9 @@ AUDIENCE_INSIGHTS = {
     }
 }
 
+should_post = False
+priority = 'medium'
+
 ignore_schedule = '${{ github.event.inputs.ignore_schedule }}' == 'true'
           
 if ignore_schedule:

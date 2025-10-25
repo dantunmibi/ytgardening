@@ -107,9 +107,9 @@ jobs:
 
           OPTIMAL_SCHEDULE = {
               0: [18, 20],   # Monday
-              1: [12, 18],   # Tuesday
+              1: [12, 18.5],   # Tuesday
               2: [16, 19],   # Wednesday
-              3: [17, 19],   # Thursday
+              3: [17, 19.5],   # Thursday
               4: [17, 19],   # Friday
               5: [9, 14, 18],# Saturday
               6: [10, 15, 19]# Sunday

@@ -105,10 +105,41 @@ jobs:
           hour = current.hour
           weekday = current.weekday()
           
+          OPTIMAL_SCHEDULE = {
+              0: [  # Monday - Low priority (back to work)
+                  {"time": "18:00", "priority": "medium", "content_type": "weekly_planning"},
+                  {"time": "20:00", "priority": "low", "content_type": "inspiration"}
+              ],
+              1: [  # Tuesday - Moderate (mid-week planning)
+                  {"time": "12:00", "priority": "medium", "content_type": "quick_tips"},
+                  {"time": "18:30", "priority": "medium", "content_type": "problem_solving"}
+              ],
+              2: [  # Wednesday - BEST WEEKDAY for general audience
+                  {"time": "16:00", "priority": "high", "content_type": "propagation"},
+                  {"time": "19:00", "priority": "high", "content_type": "trending_hack"}
+              ],
+              3: [  # Thursday - Planning for weekend gardening
+                  {"time": "17:00", "priority": "high", "content_type": "weekend_prep"},
+                  {"time": "19:30", "priority": "medium", "content_type": "seasonal_tips"}
+              ],
+              4: [  # Friday - Pre-weekend excitement
+                  {"time": "17:00", "priority": "medium", "content_type": "weekend_projects"},
+                  {"time": "19:00", "priority": "medium", "content_type": "inspiration"}
+              ],
+              5: [  # Saturday - PRIME DAY (morning gardeners + leisure time)
+                  {"time": "09:00", "priority": "highest", "content_type": "morning_routine"},
+                  {"time": "14:00", "priority": "highest", "content_type": "weekend_project"},
+                  {"time": "18:00", "priority": "high", "content_type": "harvest_showcase"}
+              ],
+              6: [  # Sunday - SECOND BEST (leisure + planning next week)
+                  {"time": "10:00", "priority": "highest", "content_type": "sunday_garden"},
+                  {"time": "15:00", "priority": "high", "content_type": "weekly_planning"},
+                  {"time": "19:00", "priority": "medium", "content_type": "relaxation"}
+              ]
+          }
+
           should_post = False
           priority = 'medium'
-
-          import .github/scripts/optimal_scheduler.py
           
           ignore_schedule = '${{ github.event.inputs.ignore_schedule }}' == 'true'
           

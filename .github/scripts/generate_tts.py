@@ -73,6 +73,7 @@ def clean_text_for_tts(text: str) -> str:
         '$': ' dollars ',
         '#': ' hashtag ',
         '...': ' ',
+        '-': ' to ',
     }
     for k, v in replacements.items():
         text = text.replace(k, v)

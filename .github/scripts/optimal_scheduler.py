@@ -120,6 +120,12 @@ else:
     should_post = weekday >= 5  # Allow weekend posts
     priority = 'low'
 
+# Write to GITHUB_OUTPUT
+with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+    f.write(f'should_post={str(should_post).lower()}\n')
+    f.write(f'priority={priority}\n')
+    f.write(f'current_time={current.strftime("%Y-%m-%d %H:%M WAT")}\n')
+
 def get_next_optimal_time(current_time=None):
     """
     Calculate the next optimal posting time for gardening content.

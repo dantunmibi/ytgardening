@@ -125,47 +125,67 @@ def fetch_and_map_existing_playlists(youtube, niche, config):
     print("🔄 Fetching existing playlists from channel...")
     existing_playlists = {}
     nextPageToken = None
-    
-    try:
-        while True:
-            response = youtube.playlists().list(
-                part="snippet",
-                mine=True,
-                maxResults=50,
-                pageToken=nextPageToken
-            ).execute()
-            
-            for item in response.get("items", []):
-                existing_playlists[item["snippet"]["title"].lower()] = item["id"]
-            
-            nextPageToken = response.get("nextPageToken")
-            if not nextPageToken:
+    while True:
+
+        response = youtube.playlists().list(
+
+            part="snippet",
+
+            mine=True,
+
+            maxResults=50,
+
+            pageToken=nextPageToken
+
+        ).execute()
+
+        for item in response.get("items", []):
+
+            existing_playlists[item["snippet"]["title"].lower()] = item["id"]
+
+        nextPageToken = response.get("nextPageToken")
+
+        if not nextPageToken:
+
+            break
+
+
+
+    # Map to your categories using fuzzy matching
+
+    for category, rules in PLAYLIST_RULES[niche].items():
+
+        key = f"{niche}_{category}"
+
+        match = None
+
+        for title, pid in existing_playlists.items():
+
+            ratio = difflib.SequenceMatcher(None, rules["title"].lower(), title).ratio()
+
+            if ratio > 0.6:
+
+                match = pid
+
                 break
 
-        # Map to your categories using fuzzy matching
-        for category, rules in PLAYLIST_RULES[niche].items():
-            playlist_key = f"{niche}_{category}"
-            match = None
-            best_ratio = 0
-            
-            for title, pid in existing_playlists.items():
-                ratio = difflib.SequenceMatcher(None, rules["title"].lower(), title).ratio()
-                if ratio > 0.6 and ratio > best_ratio:
-                    match = pid
-                    best_ratio = ratio
-            
-            if match:
-                if playlist_key in config and config[playlist_key] != match:
-                    print(f"♻️ Updated stale playlist ID for '{rules['title']}' -> {match}")
-                else:
-                    print(f"✅ Mapped existing playlist '{rules['title']}' -> {match}")
-                config[playlist_key] = match
+        if match:
 
-        return config
-        
-    except Exception as e:
-        print(f"❌ Error fetching playlists: {e}")
-        return config
+            if key in config and config[key] != match:
+
+                print(f"♻️ Updated stale playlist ID for '{rules['title']}' -> {match}")
+
+            else:
+
+                print(f"✅ Mapped existing playlist '{rules['title']}' -> {match}")
+
+            config[key] = match
+
+
+
+            print(f"✅ Mapped existing playlist '{rules['title']}' -> {match}")
+
+    return config
 
 
 def load_upload_history():
@@ -212,6 +232,7 @@ def get_or_create_playlist(youtube, niche, category, config):
         
         # Add channel branding to description
         full_description = f"{description}\n\n🌱 Garden Glow Up - Daily gardening hacks that actually work!\nFollow for more plant tips and garden transformations."
+        tags = playlist_info.get("tags", [])
 
         request = youtube.playlists().insert(
             part="snippet,status",
@@ -219,7 +240,7 @@ def get_or_create_playlist(youtube, niche, category, config):
                 "snippet": {
                     "title": title,
                     "description": full_description,
-                    "tags": ["gardening", "plants", "garden tips", "horticulture"]
+                    "tags": tags
                 },
                 "status": {"privacyStatus": "public"}
             }
@@ -304,27 +325,26 @@ def add_video_to_playlist(youtube, video_id, playlist_id):
     # Get existing videos in playlist
     existing_videos = set()
     nextPageToken = None
-    
+    while True:
+        request = youtube.playlistItems().list(
+            part="snippet",
+            playlistId=playlist_id,
+            maxResults=50,
+            pageToken=nextPageToken
+        )
+        response = request.execute()
+        for item in response.get("items", []):
+            existing_videos.add(item["snippet"]["resourceId"]["videoId"])
+        nextPageToken = response.get("nextPageToken")
+        if not nextPageToken:
+            break
+
+    if video_id in existing_videos:
+        print("      ℹ️ Video already in playlist, skipping")
+        return False
+
+    # Add video
     try:
-        while True:
-            request = youtube.playlistItems().list(
-                part="snippet",
-                playlistId=playlist_id,
-                maxResults=50,
-                pageToken=nextPageToken
-            )
-            response = request.execute()
-            for item in response.get("items", []):
-                existing_videos.add(item["snippet"]["resourceId"]["videoId"])
-            nextPageToken = response.get("nextPageToken")
-            if not nextPageToken:
-                break
-
-        if video_id in existing_videos:
-            print("      ℹ️ Video already in playlist, skipping")
-            return False
-
-        # Add video to playlist
         youtube.playlistItems().insert(
             part="snippet",
             body={

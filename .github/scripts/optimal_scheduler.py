@@ -102,27 +102,6 @@ AUDIENCE_INSIGHTS = {
     }
 }
 
-should_post = False
-priority = 'medium'
-
-ignore_schedule = '${{ github.event.inputs.ignore_schedule }}' == 'true'
-          
-if ignore_schedule:
-    print('⚠️ Schedule check BYPASSED by user input')
-    should_post = True
-    priority = 'manual'
-elif weekday in OPTIMAL_SCHEDULE:
-    if hour in OPTIMAL_SCHEDULE[weekday]:
-        should_post = True
-        priority = 'highest' if (weekday == 1 and hour == 13) else 'high'
-        print(f'✅ Within optimal window: {current.strftime("%A %I:%M %p WAT")}')
-    else:
-        print(f'⏳ Not optimal time. Current: {current.strftime("%A %I:%M %p WAT")}')
-else:
-    print(f'⏸️ Weekend - lower priority time')
-    should_post = weekday >= 5  # Allow weekend posts
-    priority = 'low'
-
 # Write to GITHUB_OUTPUT
 with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
     f.write(f'should_post={str(should_post).lower()}\n')

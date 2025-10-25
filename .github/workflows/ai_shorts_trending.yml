@@ -127,7 +127,7 @@ jobs:
                   {"time": "19:00", "priority": "medium", "content_type": "inspiration"}
               ],
               5: [  # Saturday - PRIME DAY (morning gardeners + leisure time)
-                  {"time": "09:00", "priority": "highest", "content_type": "morning_routine"},
+                  {"time": "9:00", "priority": "highest", "content_type": "morning_routine"},
                   {"time": "14:00", "priority": "highest", "content_type": "weekend_project"},
                   {"time": "18:00", "priority": "high", "content_type": "harvest_showcase"}
               ],

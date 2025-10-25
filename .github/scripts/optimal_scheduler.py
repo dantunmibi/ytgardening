@@ -8,6 +8,9 @@ TMP = os.getenv("GITHUB_WORKSPACE", ".") + "/tmp"
 
 # Your timezone (Lagos, Nigeria)
 LOCAL_TZ = pytz.timezone('Africa/Lagos')  # WAT (UTC+1)
+current = datetime.now(tz=LOCAL_TZ)
+weekday = current.weekday()
+hour = current.hour
 
 # GARDENING-SPECIFIC OPTIMAL POSTING SCHEDULE
 # Based on research: Gardeners are most active on weekends (especially Saturday mornings)

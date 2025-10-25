@@ -2,14 +2,13 @@
 """
 .github/scripts/generate_tts.py
 Garden Glow Up - Robust Coqui TTS generation with gardening-specific cleaning
-Primary model: tts_models/en/vctk/vits (speaker p226 recommended)
+OPTIMIZED: Using best researched models with proper speaker configuration
 """
 import os
 import json
 import re
-import math
+import sys
 from tenacity import retry, stop_after_attempt, wait_exponential
-from TTS.api import TTS
 from pydub import AudioSegment
 import logging
 
@@ -20,23 +19,37 @@ os.makedirs(TMP, exist_ok=True)
 FULL_AUDIO_PATH = os.path.join(TMP, "voice.mp3")
 AUDIO_METADATA = os.path.join(TMP, "audio_metadata.json")
 
-# Config (can override via env)
-PRIMARY_MODEL = os.getenv("GARDEN_VOICE_MODEL", "tts_models/en/vctk/vits")
-PRIMARY_SPEAKER = os.getenv("GARDEN_VCTK_SPEAKER", "p226")
-ALT_MODELS = ["tts_models/en/jenny/jenny", "tts_models/en/ljspeech/tacotron2-DDC"]
+# ===== OPTIMIZED MODEL CONFIGURATION (BASED ON RESEARCH) =====
+# Primary: VCTK-VITS is fastest and highest quality for YouTube Shorts
+PRIMARY_MODEL = "tts_models/en/vctk/vits"
+PRIMARY_SPEAKER = "p225"  # Female, clear American accent
 
-print(f"✅ TTS pipeline init — primary model: {PRIMARY_MODEL} speaker: {PRIMARY_SPEAKER}")
+# Alternative speakers (if primary fails or for variety)
+ALT_VCTK_SPEAKERS = ["p230", "p273", "p330", "p234"]  # Mix of male/female, American/British
+
+# Fallback models (in order of preference)
+FALLBACK_MODELS = [
+    "tts_models/en/ljspeech/tacotron2-DDC",
+    "tts_models/en/ljspeech/glow-tts",
+    "tts_models/en/ljspeech/fast_pitch"
+]
+
+print(f"✅ TTS Configuration:")
+print(f"   Primary Model: {PRIMARY_MODEL}")
+print(f"   Primary Speaker: {PRIMARY_SPEAKER}")
+print(f"   Fallback Models: {len(FALLBACK_MODELS)} alternatives")
 
 # -------------------------
-# Text cleaning (gardening)
+# Enhanced Text Cleaning for Gardening
 # -------------------------
 def clean_text_for_tts(text: str) -> str:
-    """Enhanced text preprocessing for natural TTS pronunciation (gardening-aware)."""
+    """Enhanced text preprocessing for natural TTS pronunciation (gardening-optimized)."""
     if not text:
         return ""
 
     # Normalize whitespace
     text = text.strip()
+    text = re.sub(r'\s+', ' ', text)
 
     # Protect common abbreviations
     protected_patterns = {
@@ -44,82 +57,61 @@ def clean_text_for_tts(text: str) -> str:
         r'\bMr\.': 'Mister',
         r'\bMrs\.': 'Misses',
         r'\bMs\.': 'Miss',
-        r'\bProf\.': 'Professor',
         r'\betc\.': 'etcetera',
         r'\be\.g\.': 'for example',
         r'\bi\.e\.': 'that is',
-        r'\bvs\.': 'versus',
     }
     for pat, rep in protected_patterns.items():
         text = re.sub(pat, rep, text, flags=re.IGNORECASE)
 
-    # Replace ellipses with pause word (optional)
-    text = text.replace("...", " pause ")
-
-    # Treat periods as sentence ends only when followed by space + capital letter
-    text = re.sub(r'\.(\s+[A-Z])', r' SENTENCE_END\1', text)
-    # Remove remaining periods (mid-sentence)
-    text = text.replace(".", "")
-    # Restore sentence-end markers
-    text = text.replace("SENTENCE_END", ".")
-
-    # Special characters common in scripts
+    # Special characters
     replacements = {
         '%': ' percent',
         '&': ' and ',
         '+': ' plus ',
         '@': ' at ',
         '$': ' dollars ',
-        '€': ' euros ',
-        '£': ' pounds ',
         '#': ' hashtag ',
+        '...': ' ',
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
 
-    # Gardening-specific measurement and term handling
-    gardening_repls = {
-        r'(\d+)\s*"\b': r'\1 inches',
-        r'(\d+)\s*\'\b': r'\1 feet',
-        r'\b(\d+)\s*in\b': r'\1 inches',
-        r'\b(\d+)\s*ft\b': r'\1 feet',
-        r'\b(\d+)\s*cm\b': r'\1 centimeters',
-        r'\b(\d+)\s*mm\b': r'\1 millimeters',
-        r'\b(\d+)\s*tbsp\b': r'\1 tablespoons',
-        r'\b(\d+)\s*tsp\b': r'\1 teaspoons',
-        r'\b(\d+)\s*ml\b': r'\1 milliliters',
-        r'\b(\d+)\s*L\b': r'\1 liters',
-        r'\b(\d+)\s*oz\b': r'\1 ounces',
-        r'\b(\d+)\s*lb?s\b': r'\1 pounds',
-        r'\b(\d+)\s*gal\b': r'\1 gallon',
-        r'\b(\d+)\s*°C\b': r'\1 degrees Celsius',
-        r'\b(\d+)\s*°F\b': r'\1 degrees Fahrenheit',
+    # 🌱 Gardening-specific measurement and term handling
+    gardening_patterns = {
+        r'(\d+)\s*"': r'\1 inches',
+        r'(\d+)\s*\'': r'\1 feet',
+        r'(\d+)\s*in\b': r'\1 inches',
+        r'(\d+)\s*ft\b': r'\1 feet',
+        r'(\d+)\s*cm\b': r'\1 centimeters',
+        r'(\d+)\s*mm\b': r'\1 millimeters',
+        r'(\d+)\s*tbsp\b': r'\1 tablespoons',
+        r'(\d+)\s*tsp\b': r'\1 teaspoons',
+        r'(\d+)\s*ml\b': r'\1 milliliters',
+        r'(\d+)\s*L\b': r'\1 liters',
+        r'(\d+)\s*oz\b': r'\1 ounces',
+        r'(\d+)\s*lbs?\b': r'\1 pounds',
+        r'(\d+)\s*gal\b': r'\1 gallons',
+        r'(\d+)\s*°C\b': r'\1 degrees Celsius',
+        r'(\d+)\s*°F\b': r'\1 degrees Fahrenheit',
         r'\bPH\b': 'P H',
         r'\bpH\b': 'P H',
         r'\bNPK\b': 'N P K',
-        r'\bEpsom\s+salt\b': 'Epsom salt',
     }
-    for pat, rep in gardening_repls.items():
+    for pat, rep in gardening_patterns.items():
         text = re.sub(pat, rep, text, flags=re.IGNORECASE)
 
-    # Plant-name pronunciation hints (optional — add more as needed)
+    # 🌱 Plant name pronunciation hints (expand as needed)
     plant_pronunciations = {
         r'\bPothos\b': 'POH-thos',
         r'\bMonstera\b': 'mon-STAIR-uh',
         r'\bPhilodendron\b': 'fil-oh-DEN-dron',
         r'\bSansevieria\b': 'san-suh-VEER-ee-uh',
         r'\bFuchsia\b': 'FYOO-shuh',
+        r'\bAeonium\b': 'ay-OH-nee-um',
+        r'\bAglaonema\b': 'ag-lay-oh-NEE-muh',
     }
     for pat, rep in plant_pronunciations.items():
-        text = re.sub(pat, rep, text, flags=re.IGNORECASE)
-
-    # Acronyms (keep generic replacements, harmless)
-    acronym_replacements = {
-        r'\bDIY\b': 'D I Y',
-        r'\bLED\b': 'L E D',
-        r'\bUV\b': 'U V',
-    }
-    for pat, rep in acronym_replacements.items():
         text = re.sub(pat, rep, text, flags=re.IGNORECASE)
 
     # Remove emojis
@@ -131,10 +123,10 @@ def clean_text_for_tts(text: str) -> str:
         "\u2600-\u26FF\u2700-\u27BF]+", flags=re.UNICODE)
     text = emoji_pattern.sub('', text)
 
-    # Collapse multiple whitespace
+    # Collapse whitespace again
     text = re.sub(r'\s+', ' ', text).strip()
 
-    # Ensure final sentence punctuation for natural pause
+    # Ensure final punctuation
     if text and text[-1] not in ".!?":
         text = text + "."
 
@@ -160,7 +152,8 @@ def generate_silent_audio_fallback(text: str, out_path: str) -> str:
     """Create silent audio with duration estimated from word count."""
     try:
         words = len(text.split())
-        duration_ms = max(15000, min(75000, int((words / 150.0) * 60000)))
+        # Target 140-150 WPM for gardening content
+        duration_ms = max(15000, min(75000, int((words / 145.0) * 60000)))
         silent = AudioSegment.silent(duration=duration_ms, frame_rate=22050)
         silent.export(out_path, format="mp3")
         logging.info(f"✅ Silent fallback created ({duration_ms/1000:.1f}s) at {out_path}")
@@ -170,114 +163,148 @@ def generate_silent_audio_fallback(text: str, out_path: str) -> str:
         raise
 
 # -------------------------
-# TTS helpers
+# TTS Generation
 # -------------------------
 def _tts_to_file(tts_obj, text: str, out_path: str, speaker: str = None):
     """
-    Robust wrapper around TTS.tts_to_file:
-    - Tries with speaker param if provided (multi-speaker models)
-    - Falls back to calling without speaker argument
+    Robust wrapper around TTS.tts_to_file with speaker support
     """
     try:
         if speaker:
-            # some models accept 'speaker' — try with it
-            tts_obj.tts_to_file(text=text, file_path=out_path, speaker=speaker)
-        else:
-            tts_obj.tts_to_file(text=text, file_path=out_path)
-    except TypeError:
-        # If model doesn't accept speaker keyword, try without
+            # Try with speaker parameter
+            try:
+                tts_obj.tts_to_file(text=text, file_path=out_path, speaker_idx=speaker)
+                return
+            except TypeError:
+                # Model doesn't support speaker_idx, try without
+                logging.info("   (Model doesn't support speaker selection, using default)")
+                pass
+        
+        # Fallback: no speaker parameter
         tts_obj.tts_to_file(text=text, file_path=out_path)
+        
+    except Exception as e:
+        logging.error(f"   TTS generation error: {e}")
+        raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=4, max=30))
 def generate_sectional_tts():
     """
-    Attempt sectional generation using primary model (VCTK recommended).
-    Falls back to alternative local model(s) and ultimately to gTTS.
-    Returns list of section paths.
+    Generate TTS using optimized model configuration
+    Primary: VCTK-VITS (fastest, best quality)
+    Fallback: LJSpeech models → gTTS
     """
+    from TTS.api import TTS
+    
     sections = [("hook", hook)] + [(f"bullet_{i}", b) for i, b in enumerate(bullets)] + [("cta", cta)]
     section_paths = []
 
-    # Try primary model first
+    # ===== TRY PRIMARY MODEL (VCTK-VITS) =====
     try:
-        logging.info(f"🔊 Loading Coqui model: {PRIMARY_MODEL}")
+        logging.info(f"🔊 Loading PRIMARY model: {PRIMARY_MODEL}")
         tts = TTS(model_name=PRIMARY_MODEL, progress_bar=False)
+        
+        # Verify speaker support
+        available_speakers = getattr(tts, "speakers", None)
         use_speaker = False
-        try:
-            available_speakers = getattr(tts, "speakers", None)
-            if available_speakers and PRIMARY_SPEAKER in available_speakers:
+        selected_speaker = PRIMARY_SPEAKER
+        
+        if available_speakers:
+            if PRIMARY_SPEAKER in available_speakers:
                 use_speaker = True
-        except Exception:
-            use_speaker = False
-
-        logging.info(f"   -> model loaded. speaker supported: {use_speaker}")
-
+                logging.info(f"   ✅ Using speaker: {PRIMARY_SPEAKER}")
+            else:
+                # Try alternative speakers
+                for alt_speaker in ALT_VCTK_SPEAKERS:
+                    if alt_speaker in available_speakers:
+                        use_speaker = True
+                        selected_speaker = alt_speaker
+                        logging.info(f"   ✅ Using alternative speaker: {alt_speaker}")
+                        break
+                
+                if not use_speaker:
+                    logging.info(f"   ⚠️ No preferred speakers available, using default")
+        
+        # Generate each section
         for name, text in sections:
             if not text.strip():
                 continue
+            
             clean = clean_text_for_tts(text)
             out_path = os.path.join(TMP, f"{name}.mp3")
-            logging.info(f"🎧 Generating section '{name}' ({len(clean)} chars)...")
-            # If section is long, split by sentences to avoid model issues
-            # but we can just pass in the clean section (coqui handles moderate lengths)
-            _tts_to_file(tts, clean, out_path, speaker=(PRIMARY_SPEAKER if use_speaker else None))
-
+            
+            logging.info(f"🎧 Generating '{name}' ({len(clean)} chars)")
+            
+            if use_speaker:
+                _tts_to_file(tts, clean, out_path, speaker=selected_speaker)
+            else:
+                _tts_to_file(tts, clean, out_path)
+            
             if os.path.exists(out_path) and os.path.getsize(out_path) > 1024:
                 section_paths.append(out_path)
-                logging.info(f"   ✅ saved {out_path}")
+                logging.info(f"   ✅ {out_path}")
             else:
-                raise Exception(f"Section file missing or too small: {out_path}")
+                raise Exception(f"Section file invalid: {out_path}")
 
-        # Combine sections with short pauses (gardening needs slightly longer pauses for clarity)
+        # Combine sections with pauses
         combined = AudioSegment.silent(duration=0)
         for i, path in enumerate(section_paths):
             part = AudioSegment.from_file(path)
-            pause_ms = 200 if i < len(section_paths) - 1 else 0
+            # 250ms pause between sections (gardening content benefits from slightly longer pauses)
+            pause_ms = 250 if i < len(section_paths) - 1 else 0
             combined += part + AudioSegment.silent(duration=pause_ms)
 
         combined.export(FULL_AUDIO_PATH, format="mp3")
-        logging.info(f"✅ Combined TTS exported to {FULL_AUDIO_PATH}")
+        logging.info(f"✅ PRIMARY model success! Audio: {FULL_AUDIO_PATH}")
         return section_paths
 
     except Exception as primary_err:
-        logging.warning(f"⚠️ Primary model failed: {primary_err}")
+        logging.warning(f"⚠️ PRIMARY model failed: {primary_err}")
 
-    # Try alternative local models
-    for alt in ALT_MODELS:
+    # ===== TRY FALLBACK MODELS =====
+    for fallback_model in FALLBACK_MODELS:
         try:
-            logging.info(f"🔁 Trying alternative model: {alt}")
-            tts_alt = TTS(model_name=alt, progress_bar=False)
+            logging.info(f"🔁 Trying FALLBACK: {fallback_model}")
+            tts_fb = TTS(model_name=fallback_model, progress_bar=False)
+            
             section_paths = []
             for name, text in sections:
                 if not text.strip():
                     continue
+                
                 clean = clean_text_for_tts(text)
                 out_path = os.path.join(TMP, f"{name}.mp3")
-                logging.info(f"🎧 Generating with alt model '{alt}': {name}")
-                _tts_to_file(tts_alt, clean, out_path, speaker=None)
+                
+                _tts_to_file(tts_fb, clean, out_path)
+                
                 if os.path.exists(out_path) and os.path.getsize(out_path) > 1024:
                     section_paths.append(out_path)
                 else:
-                    raise Exception(f"Alt model failed creating {out_path}")
+                    raise Exception(f"Fallback section failed: {out_path}")
+            
             # Combine
             combined = AudioSegment.silent(duration=0)
             for i, path in enumerate(section_paths):
                 part = AudioSegment.from_file(path)
-                pause_ms = 200 if i < len(section_paths) - 1 else 0
+                pause_ms = 250 if i < len(section_paths) - 1 else 0
                 combined += part + AudioSegment.silent(duration=pause_ms)
+            
             combined.export(FULL_AUDIO_PATH, format="mp3")
-            logging.info(f"✅ Combined (alt) TTS exported to {FULL_AUDIO_PATH}")
+            logging.info(f"✅ FALLBACK model success! ({fallback_model})")
             return section_paths
+            
         except Exception as e:
-            logging.warning(f"⚠️ Alt model {alt} failed: {e}")
+            logging.warning(f"⚠️ {fallback_model} failed: {e}")
             continue
 
-    # Final fallback: generate single full audio with gTTS and split proportionally
-    logging.info("🔄 Falling back to gTTS / split-on-proportion approach")
+    # ===== FINAL FALLBACK: gTTS =====
+    logging.info("🔄 All local models failed, using gTTS...")
     fallback_path = generate_tts_fallback(spoken, FULL_AUDIO_PATH)
+    
     if not os.path.exists(fallback_path) or os.path.getsize(fallback_path) < 1000:
-        raise Exception("Final fallback audio not created")
+        raise Exception("All TTS methods failed")
 
+    # Split proportionally for sectional audio
     full_audio = AudioSegment.from_file(fallback_path)
     total_ms = len(full_audio)
     section_texts = [(name, text) for name, text in sections if text.strip()]
@@ -289,32 +316,33 @@ def generate_sectional_tts():
         words = len(text.split())
         proportion = words / total_words
         dur_ms = max(500, int(total_ms * proportion))
+        
         seg = full_audio[current_pos:current_pos + dur_ms]
         out_path = os.path.join(TMP, f"{name}.mp3")
         seg.export(out_path, format="mp3")
         section_paths.append(out_path)
         current_pos += dur_ms
 
-    # Recombine to main file
+    # Recombine with pauses
     combined = AudioSegment.silent(duration=0)
     for i, path in enumerate(section_paths):
         part = AudioSegment.from_file(path)
-        pause_ms = 200 if i < len(section_paths) - 1 else 0
+        pause_ms = 250 if i < len(section_paths) - 1 else 0
         combined += part + AudioSegment.silent(duration=pause_ms)
+    
     combined.export(FULL_AUDIO_PATH, format="mp3")
-
-    logging.info("✅ Sections created from fallback gTTS and combined")
+    logging.info("✅ gTTS fallback complete")
     return section_paths
 
 # -------------------------
-# Main
+# Main Execution
 # -------------------------
 if __name__ == "__main__":
     # Load script.json
     script_path = os.path.join(TMP, "script.json")
     if not os.path.exists(script_path):
         logging.error(f"❌ Missing script file: {script_path}")
-        raise SystemExit(1)
+        sys.exit(1)
 
     with open(script_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -326,7 +354,9 @@ if __name__ == "__main__":
     # Build spoken text
     spoken_parts = [p.strip() for p in [hook] + bullets + [cta] if p and p.strip()]
     spoken = ". ".join(spoken_parts)
-    logging.info(f"🎙️ Preparing TTS for {len(spoken)} chars. Preview: {spoken[:120]}...")
+    
+    logging.info(f"🎙️ Preparing TTS for {len(spoken)} chars")
+    logging.info(f"   Preview: {spoken[:100]}...")
 
     try:
         section_paths = generate_sectional_tts()
@@ -339,36 +369,47 @@ if __name__ == "__main__":
         actual_duration = audio.duration_seconds
         file_size_kb = os.path.getsize(FULL_AUDIO_PATH) / 1024.0
 
-        # Duration checks tuned to PRD: target 45-75s for gardening shorts
+        # Duration target: 45-75s for gardening shorts
         if actual_duration > 75:
-            logging.warning(f"⚠️ Audio too long ({actual_duration:.1f}s) — forcing fallback gTTS")
-            generate_tts_fallback(spoken, FULL_AUDIO_PATH)
-            audio = AudioSegment.from_file(FULL_AUDIO_PATH)
-            actual_duration = audio.duration_seconds
+            logging.warning(f"⚠️ Audio too long ({actual_duration:.1f}s) — consider trimming")
+        elif actual_duration < 20:
+            logging.warning(f"⚠️ Audio very short ({actual_duration:.1f}s)")
 
         words = len(spoken.split())
-        estimated_duration = (words / 150.0) * 60.0
+        estimated_duration = (words / 145.0) * 60.0  # ~145 WPM for gardening
 
         metadata = {
             "text": spoken,
             "words": words,
-            "estimated_duration": estimated_duration,
-            "actual_duration": actual_duration,
+            "estimated_duration": round(estimated_duration, 2),
+            "actual_duration": round(actual_duration, 2),
             "file_size_kb": round(file_size_kb, 2),
             "tts_provider": PRIMARY_MODEL,
+            "speaker": PRIMARY_SPEAKER,
             "model_info": {
-                "selected_primary": PRIMARY_MODEL,
-                "speaker": PRIMARY_SPEAKER
+                "primary": PRIMARY_MODEL,
+                "speaker": PRIMARY_SPEAKER,
+                "fallbacks": FALLBACK_MODELS
             },
             "content_type": "gardening",
-            "optimal_duration_met": 45 <= actual_duration <= 75
+            "optimal_duration_met": 45 <= actual_duration <= 75,
+            "wpm": round(words / (actual_duration / 60.0), 1) if actual_duration > 0 else 0
         }
 
         with open(AUDIO_METADATA, "w", encoding="utf-8") as mf:
             json.dump(metadata, mf, indent=2)
 
-        logging.info(f"📊 Audio duration: {actual_duration:.1f}s  words: {words}  file: {FULL_AUDIO_PATH}")
-        logging.info(f"✅ TTS generation complete; metadata saved: {AUDIO_METADATA}")
+        logging.info(f"\n📊 TTS Generation Complete!")
+        logging.info(f"   Duration: {actual_duration:.1f}s")
+        logging.info(f"   Words: {words}")
+        logging.info(f"   WPM: {metadata['wpm']}")
+        logging.info(f"   File: {FULL_AUDIO_PATH} ({file_size_kb:.1f} KB)")
+        logging.info(f"   Model: {PRIMARY_MODEL}")
+        logging.info(f"   Speaker: {PRIMARY_SPEAKER}")
+        logging.info(f"   ✅ Metadata: {AUDIO_METADATA}")
+        
     except Exception as e:
         logging.error(f"❌ TTS generation failed: {e}")
-        raise SystemExit(1)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

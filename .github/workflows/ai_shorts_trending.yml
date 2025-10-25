@@ -1,9 +1,55 @@
-name: AI Trending Shorts Pipeline v2
+name: 🌱 Garden Glow Up - Smart Automated Gardening Shorts Pipeline
 
 on:
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Platforms to upload to (comma-separated: youtube,tiktok,instagram,facebook,makecom)'
+        required: false
+        default: 'youtube,facebook'
+      force_all:
+        description: 'Force upload to all enabled platforms'
+        required: false
+        type: boolean
+        default: false
+      ignore_schedule:
+        description: 'Ignore optimal timing and post immediately'
+        required: false
+        type: boolean
+        default: false
   schedule:
-    - cron: '0 18 * * *' # Daily at 18:00 UTC
+  # 🌱 GARDENING-OPTIMAL POSTING SCHEDULE (EST-based)
+  # Using data from optimal_scheduler.py - gardener peak activity times
+  
+  # Monday: 6 PM (evening planning), 8 PM (inspiration)
+  - cron: '0 23 * * 1'   # 6 PM EST - Evening planning
+  - cron: '0 1 * * 2'    # 8 PM EST - Inspiration content
+  
+  # Tuesday: 12 PM (quick tips), 6:30 PM (problem solving) - HIGHEST priority
+  - cron: '0 17 * * 2'   # 12 PM EST - Quick tips
+  - cron: '0 23 * * 2'   # 6:30 PM EST - Problem solving
+  
+  # Wednesday: 4 PM (propagation), 7 PM (trending hack) - BEST WEEKDAY
+  - cron: '0 21 * * 3'   # 4 PM EST - Propagation content
+  - cron: '0 0 * * 4'    # 7 PM EST - Trending hack
+  
+  # Thursday: 5 PM (weekend prep), 7:30 PM (seasonal tips)
+  - cron: '0 22 * * 4'   # 5 PM EST - Weekend prep
+  - cron: '0 0 * * 5'    # 7:30 PM EST - Seasonal tips
+  
+  # Friday: 5 PM (weekend projects), 7 PM (inspiration)
+  - cron: '0 22 * * 5'   # 5 PM EST - Weekend projects
+  - cron: '0 0 * * 6'    # 7 PM EST - Inspiration
+  
+  # Saturday: 9 AM (morning routine), 2 PM (weekend project), 6 PM (harvest) - PRIME DAY
+  - cron: '0 14 * * 6'   # 9 AM EST - Morning routine
+  - cron: '0 19 * * 6'   # 2 PM EST - Weekend project
+  - cron: '0 23 * * 6'   # 6 PM EST - Harvest showcase
+  
+  # Sunday: 10 AM (sunday garden), 3 PM (weekly planning), 7 PM (relaxation) - SECOND BEST
+  - cron: '0 15 * * 0'   # 10 AM EST - Sunday garden
+  - cron: '0 20 * * 0'   # 3 PM EST - Weekly planning
+  - cron: '0 0 * * 1'    # 7 PM EST - Relaxation
 
 jobs:
   build_and_upload:
@@ -11,19 +57,117 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Checkout
+      - name: 🌱 Checkout Garden Glow Up
         uses: actions/checkout@v4
 
-      - name: Validate secrets
+      - name: 🔐 Validate secrets
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          MAKECOM_WEBHOOK_URL: ${{ secrets.MAKECOM_WEBHOOK_URL }}
         run: python .github/scripts/validate_secrets.py
 
-      - name: Install system deps
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 💾 Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-gardening-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-gardening-
+            ${{ runner.os }}-pip-
+
+      - name: 📦 Install Python packages (for scheduler check)
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytz
+
+      - name: 🌱 Check optimal gardening posting time (using optimal_scheduler.py)
+        id: schedule_check
+        run: |
+          # Use the sophisticated gardening scheduler
+          python .github/scripts/optimal_scheduler.py
+
+      - name: 📅 Display gardening scheduling decision
+        run: |
+          if [ -f tmp/posting_schedule.json ]; then
+            SHOULD_POST=$(jq -r '.should_post_now' tmp/posting_schedule.json)
+            PRIORITY=$(jq -r '.next_optimal_slot.priority' tmp/posting_schedule.json)
+            CONTENT_TYPE=$(jq -r '.next_optimal_slot.content_type' tmp/posting_schedule.json)
+            CURRENT_TIME=$(jq -r '.current_time' tmp/posting_schedule.json)
+            
+            echo "📅 Current Time: $CURRENT_TIME"
+            echo "🎯 Should Post: $SHOULD_POST"
+            echo "⭐ Priority: $PRIORITY"
+            echo "🌱 Content Type: $CONTENT_TYPE"
+            
+            # Set outputs for next steps
+            echo "should_post=$SHOULD_POST" >> $GITHUB_OUTPUT
+            echo "priority=$PRIORITY" >> $GITHUB_OUTPUT
+            echo "content_type=$CONTENT_TYPE" >> $GITHUB_OUTPUT
+            echo "current_time=$CURRENT_TIME" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Schedule file not found, checking manually..."
+            # Fallback to manual check
+            python -c "
+            from datetime import datetime
+            import pytz
+            tz = pytz.timezone('US/Eastern')
+            current = datetime.now(tz)
+            weekday = current.weekday()
+            hour = current.hour
+            
+            # Weekend check - allow weekend posts
+            should_post = weekday >= 5
+            priority = 'medium' if should_post else 'low'
+            
+            with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                f.write(f'should_post={str(should_post).lower()}\n')
+                f.write(f'priority={priority}\n')
+                f.write(f'current_time={current.strftime(\"%Y-%m-%d %H:%M EST\")}\n')
+            "
+            
+            echo "🎯 Should Post: ${{ steps.schedule_check.outputs.should_post }}"
+            echo "⭐ Priority: ${{ steps.schedule_check.outputs.priority }}"
+          fi
+          echo "🌱 Audience: Gardeners planning their day"
+
+      - name: ⏸️ Skip if not optimal gardening time
+        if: steps.schedule_check.outputs.should_post != 'true'
+        run: |
+          echo "⏸️ Skipping run - not within optimal gardening posting window"
+          echo "💡 Next optimal gardening times:"
+          if [ -f tmp/posting_schedule.json ]; then
+            jq -r '.weekly_schedule | to_entries[] | "\(.key): \(.value[0].time) EST - \(.value[0].content_type)"' tmp/posting_schedule.json | head -5
+          else
+            echo "   • Saturday 9:00 AM (PRIME TIME - Weekend gardeners)"
+            echo "   • Sunday 10:00 AM (SECOND BEST - Leisure + planning)"
+            echo "   • Wednesday 4:00 PM (BEST WEEKDAY - Mid-week engagement)"
+            echo "   • Tuesday 12:00 PM (HIGHEST - New week motivation)"
+          fi
+          exit 0
+          
+      - name: 📦 Cache apt packages
+        if: steps.schedule_check.outputs.should_post == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            /var/cache/apt/archives
+            /var/lib/apt/lists
+          key: ${{ runner.os }}-apt-gardening-${{ hashFiles('.github/workflows/garden_shorts_smart.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-apt-gardening-
+            ${{ runner.os }}-apt-
+
+      - name: 🔧 Install system deps
+        if: steps.schedule_check.outputs.should_post == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -38,137 +182,379 @@ jobs:
           echo "📝 Available fonts:"
           fc-list | grep -i dejavu | head -3
           fc-list | grep -i liberation | head -3
+          echo "🌱 System ready for gardening content generation"
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      # ✅ Cache Python dependencies
-      - name: Cache pip packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      # ✅ Cache Coqui TTS models
-      - name: Cache Coqui models
+      - name: 🎙️ Cache Coqui models
+        if: steps.schedule_check.outputs.should_post == 'true'
         uses: actions/cache@v4
         with:
           path: ~/.local/share/tts
-          key: coqui-models-${{ runner.os }}
+          key: coqui-models-gardening-${{ runner.os }}
 
-      - name: Make tmp folder (and ensure writeable)
+      - name: 📁 Create tmp folder
+        if: steps.schedule_check.outputs.should_post == 'true'
         run: |
           mkdir -p tmp
           chmod -R 777 tmp
+          echo "🌱 Workspace ready for gardening content"
 
-      # Restore playlist configuration
-      - name: Restore playlist config
+      - name: 📋 Restore platform config
+        if: steps.schedule_check.outputs.should_post == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: tmp/platform_config.json
+          key: platform-config-gardening-${{ github.run_number }}
+          restore-keys: |
+            platform-config-gardening-
+            platform-config-
+
+      - name: 📚 Restore playlist config
+        if: steps.schedule_check.outputs.should_post == 'true'
         uses: actions/cache/restore@v4
         with:
           path: tmp/playlist_config.json
-          key: playlist-config-${{ github.run_number }}
+          key: playlist-config-gardening-${{ github.run_number }}
           restore-keys: |
+            playlist-config-gardening-
             playlist-config-
 
-      # ✅ FIXED: Use static cache key for content history
-      - name: Restore content history
+      - name: 📖 Restore gardening content history
+        if: steps.schedule_check.outputs.should_post == 'true'
         uses: actions/cache/restore@v4
         with:
           path: tmp/content_history.json
-          key: content-history-${{ github.run_number }}
+          key: content-history-gardening-${{ github.run_number }}
           restore-keys: |
+            content-history-gardening-
             content-history-
 
-      - name: Install Python packages
+      - name: 📦 Install Python packages
+        if: steps.schedule_check.outputs.should_post == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          echo "🌱 Python dependencies installed"
 
-      - name: Fetch trending topics
+      - name: 🔍 Fetch trending gardening topics
+        if: steps.schedule_check.outputs.should_post == 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python .github/scripts/fetch_trending.py
+        run: |
+          echo "🌱 Fetching trending gardening topics..."
+          python .github/scripts/fetch_trending.py
 
-      - name: Generate trending topic & script
+      - name: ✍️ Generate gardening script
+        if: steps.schedule_check.outputs.should_post == 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python .github/scripts/generate_trending_and_script.py
+        run: |
+          echo "🌱 Generating viral gardening script..."
+          python .github/scripts/generate_trending_and_script.py
 
-      - name: Generate TTS (Local Coqui)
-        run: python .github/scripts/generate_tts.py
+      - name: 🎙️ Generate gardening voiceover (Coqui TTS)
+        if: steps.schedule_check.outputs.should_post == 'true'
+        run: |
+          echo "🌱 Generating natural gardening voice..."
+          python .github/scripts/generate_tts.py
 
-      - name: Create video
+      - name: 🎬 Create gardening video
+        if: steps.schedule_check.outputs.should_post == 'true'
         env:
           HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
-        run: python .github/scripts/create_video.py
+        run: |
+          echo "🌱 Creating gardening video with plant imagery..."
+          python .github/scripts/create_video.py
 
-      - name: Generate thumbnail
+      - name: 🖼️ Generate gardening thumbnail
+        if: steps.schedule_check.outputs.should_post == 'true'
         env:
           HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
-        run: python .github/scripts/generate_thumbnail.py
+        run: |
+          echo "🌱 Creating eye-catching gardening thumbnail..."
+          python .github/scripts/generate_thumbnail.py
 
-      # 🧹 Clean up temporary files
-      - name: Clean up temporary files
+      - name: 🧹 Clean up temporary files
+        if: steps.schedule_check.outputs.should_post == 'true'
         run: |
           find tmp -name "scene_*.jpg" -type f -delete || true
           rm -f tmp/short_ready.mp4 || true
-          echo "🧹 Cleaned up temporary files to save disk space."
+          echo "🧹 Cleaned up temporary files to save disk space"
 
-      - name: Upload to YouTube
+      # ===== MULTI-PLATFORM GARDENING UPLOAD =====
+      - name: Upload to multiple platforms
+        if: steps.schedule_check.outputs.should_post == 'true'
+        env:
+          # YouTube (always available)
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          # TikTok (optional)
+          TIKTOK_ACCESS_TOKEN: ${{ secrets.TIKTOK_ACCESS_TOKEN }}
+          # Instagram (optional)
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+          INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
+          TEMP_VIDEO_URL: ${{ secrets.TEMP_VIDEO_URL }}
+          # Facebook (optional)
+          FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
+          FACEBOOK_ACCESS_TOKEN: ${{ secrets.FACEBOOK_ACCESS_TOKEN }}
+          # Make.com (optional)
+          MAKECOM_WEBHOOK_URL: ${{ secrets.MAKECOM_WEBHOOK_URL }}
+          PLATFORMS: ${{ github.event.inputs.platforms }}
+          FORCE_ALL: ${{ github.event.inputs.force_all }}
+        run: |
+          echo "🌱 Uploading gardening short to multiple platforms..."
+          python .github/scripts/upload_multiplatform.py
+
+      # ===== MAKE.COM INTEGRATION FOR GARDENING =====
+      
+      - name: Find actual gardening video file
+        if: success() && steps.schedule_check.outputs.should_post == 'true'
+        id: find_video
+        run: |
+          # Find the actual video file (YouTube may have renamed it)
+          if [ -f tmp/short.mp4 ]; then
+            VIDEO_PATH="tmp/short.mp4"
+            echo "✅ Found original gardening video: short.mp4"
+          else
+            # Look for renamed video files
+            RENAMED_VIDEO=$(find tmp -name "*.mp4" -type f | head -n 1)
+            if [ -n "$RENAMED_VIDEO" ]; then
+              VIDEO_PATH="$RENAMED_VIDEO"
+              echo "✅ Found renamed gardening video: $(basename $RENAMED_VIDEO)"
+            else
+              echo "❌ No gardening video file found!"
+              exit 1
+            fi
+          fi
+          
+          # Get absolute path
+          VIDEO_PATH=$(realpath "$VIDEO_PATH")
+          
+          # Output for next steps
+          echo "video_path=$VIDEO_PATH" >> $GITHUB_OUTPUT
+          echo "video_name=$(basename $VIDEO_PATH)" >> $GITHUB_OUTPUT
+          
+          # Verify file exists and has size
+          if [ ! -f "$VIDEO_PATH" ]; then
+            echo "❌ Gardening video file doesn't exist: $VIDEO_PATH"
+            exit 1
+          fi
+          
+          VIDEO_SIZE=$(stat -c%s "$VIDEO_PATH" 2>/dev/null || stat -f%z "$VIDEO_PATH")
+          if [ "$VIDEO_SIZE" -lt 100000 ]; then
+            echo "❌ Gardening video file too small: $VIDEO_SIZE bytes"
+            exit 1
+          fi
+          
+          echo "✅ Gardening video validated: $VIDEO_PATH ($VIDEO_SIZE bytes)"
+      
+      - name: Prepare Make.com gardening payload
+        if: success() && steps.schedule_check.outputs.should_post == 'true'
+        id: makecom_prep
+        run: |
+          # Read the script metadata
+          TITLE=$(jq -r '.title' tmp/script.json)
+          DESCRIPTION=$(jq -r '.description' tmp/script.json)
+          HASHTAGS=$(jq -r '.hashtags | join(" ")' tmp/script.json)
+          
+          # Use the actual video path from previous step
+          VIDEO_PATH="${{ steps.find_video.outputs.video_path }}"
+          VIDEO_SIZE=$(stat -c%s "$VIDEO_PATH" 2>/dev/null || stat -f%z "$VIDEO_PATH")
+          
+          # Get multiplatform results if available
+          YOUTUBE_URL=""
+          FACEBOOK_URL=""
+          
+          if [ -f tmp/multiplatform_log.json ]; then
+            # Extract latest upload URLs
+            YOUTUBE_URL=$(jq -r '.[-1].results[] | select(.platform=="youtube") | .url // ""' tmp/multiplatform_log.json)
+            FACEBOOK_URL=$(jq -r '.[-1].results[] | select(.platform=="facebook") | .url // ""' tmp/multiplatform_log.json)
+          fi
+          
+          # Get content type from scheduler if available
+          CONTENT_TYPE="${{ steps.schedule_check.outputs.content_type }}"
+          if [ -z "$CONTENT_TYPE" ] && [ -f tmp/posting_schedule.json ]; then
+            CONTENT_TYPE=$(jq -r '.next_optimal_slot.content_type' tmp/posting_schedule.json)
+          fi
+          
+          # Create gardening-specific payload with enhanced metadata
+          cat > tmp/makecom_payload.json <<EOF
+          {
+            "title": "$TITLE",
+            "description": "$DESCRIPTION",
+            "hashtags": "$HASHTAGS",
+            "video_name": "$(basename $VIDEO_PATH)",
+            "video_size_mb": $(echo "scale=2; $VIDEO_SIZE/1024/1024" | bc),
+            "workflow_run": "${{ github.run_number }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "niche": "gardening",
+            "content_type": "$CONTENT_TYPE",
+            "platform_urls": {
+              "youtube": "$YOUTUBE_URL",
+              "facebook": "$FACEBOOK_URL"
+            }
+          }
+          EOF
+          
+          echo "✅ Make.com gardening payload prepared"
+          cat tmp/makecom_payload.json
+
+      - name: Upload gardening video to Cloudinary for Make.com
+        if: success() && steps.schedule_check.outputs.should_post == 'true'
+        id: upload_temp
+        run: |
+          echo "📤 Uploading gardening video to Cloudinary for Make.com access..."
+          
+          # Use the actual video path
+          VIDEO_PATH="${{ steps.find_video.outputs.video_path }}"
+          
+          echo "Using gardening video: $VIDEO_PATH"
+          
+          # Pass video path as environment variable to Python script
+          export VIDEO_TO_UPLOAD="$VIDEO_PATH"
+          
+          python .github/scripts/upload_to_cloudinary.py
+          
+          # Read the URL from the output file
+          VIDEO_URL=$(cat tmp/video_url.txt)
+          
+          echo "video_url=$VIDEO_URL" >> $GITHUB_OUTPUT
+          echo "✅ Gardening video URL: $VIDEO_URL"
+        env:
+          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+          CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          VIDEO_TO_UPLOAD: ${{ steps.find_video.outputs.video_path }}
+
+      - name: Send to Make.com webhook
+        if: success() && steps.schedule_check.outputs.should_post == 'true'
+        run: |
+          # Read metadata
+          PAYLOAD=$(cat tmp/makecom_payload.json)
+          VIDEO_URL="${{ steps.upload_temp.outputs.video_url }}"
+          VIDEO_NAME="${{ steps.find_video.outputs.video_name }}"
+          
+          # Send to Make.com with gardening-specific payload
+          curl -X POST "${{ secrets.MAKECOM_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"video_url\": \"$VIDEO_URL\",
+              \"video_name\": \"$VIDEO_NAME\",
+              \"niche\": \"gardening\",
+              \"content_type\": \"${{ steps.schedule_check.outputs.content_type }}\",
+              \"metadata\": $PAYLOAD,
+              \"artifact_url\": \"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\",
+              \"github\": {
+                \"run_id\": \"${{ github.run_id }}\",
+                \"run_number\": \"${{ github.run_number }}\",
+                \"repository\": \"${{ github.repository }}\",
+                \"workflow\": \"${{ github.workflow }}\",
+                \"actor\": \"${{ github.actor }}\"
+              }
+            }"
+          
+          echo "✅ Gardening webhook sent to Make.com"
+          echo "   Video: $VIDEO_NAME"
+          echo "   URL: $VIDEO_URL"
+          echo "   Niche: Gardening 🌱"
+          echo "   Content Type: ${{ steps.schedule_check.outputs.content_type }}"
+
+      # ===== YOUTUBE GARDENING PLAYLISTS =====
+      - name: 🌿 Organize into gardening playlists
+        if: success() && steps.schedule_check.outputs.should_post == 'true'
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
-        run: python .github/scripts/upload_youtube.py
+        run: |
+          echo "🌱 Organizing gardening videos into themed playlists..."
+          python .github/scripts/manage_playlists.py
 
-      - name: Organize into playlists
-        env:
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
-        run: python .github/scripts/manage_playlists.py
-
-      - name: Verify FFmpeg filters
-        run: ffmpeg -filters | grep xfade || echo "⚠️ xfade not found — fallback to simple concat mode"
-
-      # ✅ FIXED: Save with static key so next run can restore it
-      - name: Save content history
+      - name: 💾 Save platform config
         uses: actions/cache/save@v4
-        if: always()
+        if: always() && steps.schedule_check.outputs.should_post == 'true'
         with:
-          path: tmp/content_history.json
-          key: content-history-${{ github.run_number }}
+          path: tmp/platform_config.json
+          key: platform-config-gardening-${{ github.run_number }}
 
-      # Save playlist configuration
-      - name: Save playlist config
+      - name: 💾 Save playlist config
         uses: actions/cache/save@v4
-        if: always()
+        if: always() && steps.schedule_check.outputs.should_post == 'true'
         with:
           path: tmp/playlist_config.json
-          key: playlist-config-${{ github.run_number }}
+          key: playlist-config-gardening-${{ github.run_number }}
 
-      - name: Upload artifact (latest short)
-        uses: actions/upload-artifact@v4
-        if: always()
+      - name: 💾 Save gardening content history
+        uses: actions/cache/save@v4
+        if: always() && steps.schedule_check.outputs.should_post == 'true'
         with:
-          name: latest-short-${{ github.run_number }}
+          path: tmp/content_history.json
+          key: content-history-gardening-${{ github.run_number }}
+
+      - name: 💾 Save posting schedule
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: tmp/posting_schedule.json
+          key: posting-schedule-gardening-${{ github.run_number }}
+
+      - name: 📦 Upload gardening artifacts
+        uses: actions/upload-artifact@v4
+        if: always() && steps.schedule_check.outputs.should_post == 'true'
+        with:
+          name: latest-gardening-short-${{ github.run_number }}
           path: |
             tmp/*.mp4
             tmp/thumbnail.png
             tmp/script.json
             tmp/content_history.json
             tmp/playlist_config.json
+            tmp/platform_config.json
+            tmp/multiplatform_log.json
+            tmp/posting_schedule.json
             tmp/voice.mp3
           retention-days: 30
 
-      - name: Upload logs on failure
+      - name: 📋 Upload gardening logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: error-logs-${{ github.run_number }}
+          name: error-logs-gardening-${{ github.run_number }}
           path: tmp/*.log
           retention-days: 7
+
+      - name: 🌱 Post-run gardening summary
+        if: always()
+        run: |
+          echo "## 🌱 Garden Glow Up - Workflow Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Time:** ${{ steps.schedule_check.outputs.current_time }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Posted:** ${{ steps.schedule_check.outputs.should_post }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Priority:** ${{ steps.schedule_check.outputs.priority }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Content Type:** ${{ steps.schedule_check.outputs.content_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Niche:** Gardening & Plant Care 🌱" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📅 Optimal Gardening Schedule (from scheduler)" >> $GITHUB_STEP_SUMMARY
+          if [ -f tmp/posting_schedule.json ]; then
+            jq -r '.weekly_schedule | to_entries[] | "\(.key): \(.value[0].time) EST - \(.value[0].content_type)"' tmp/posting_schedule.json | while read line; do
+              echo "- $line" >> $GITHUB_STEP_SUMMARY
+            done
+          else
+            echo "- **Saturday 9:00 AM:** PRIME TIME (Weekend gardeners)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Sunday 10:00 AM:** SECOND BEST (Leisure + planning)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Wednesday 4:00 PM:** BEST WEEKDAY (Mid-week engagement)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Tuesday 12:00 PM:** HIGHEST (New week motivation)" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌱 Gardening Content Strategy" >> $GITHUB_STEP_SUMMARY
+          echo "- **Primary:** Plant propagation, gardening hacks, pest solutions" >> $GITHUB_STEP_SUMMARY
+          echo "- **Secondary:** Urban gardening, seasonal guides, vegetable growing" >> $GITHUB_STEP_SUMMARY
+          echo "- **Audience:** Morning planners, evening organizers, weekend gardeners" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📈 Multi-Platform Distribution" >> $GITHUB_STEP_SUMMARY
+          echo "- **YouTube Shorts:** Primary platform (gardening tutorials)" >> $GITHUB_STEP_SUMMARY
+          echo "- **TikTok:** #planttok & #gardenhacks community" >> $GITHUB_STEP_SUMMARY
+          echo "- **Instagram:** #plantparents & garden aesthetics" >> $GITHUB_STEP_SUMMARY
+          echo "- **Facebook:** Gardening groups & local communities" >> $GITHUB_STEP_SUMMARY
+          echo "- **Make.com:** Advanced automation & analytics" >> $GITHUB_STEP_SUMMARY

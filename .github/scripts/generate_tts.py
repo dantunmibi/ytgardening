@@ -1,340 +1,374 @@
+#!/usr/bin/env python3
+"""
+.github/scripts/generate_tts.py
+Garden Glow Up - Robust Coqui TTS generation with gardening-specific cleaning
+Primary model: tts_models/en/vctk/vits (speaker p226 recommended)
+"""
 import os
 import json
 import re
+import math
 from tenacity import retry, stop_after_attempt, wait_exponential
 from TTS.api import TTS
 from pydub import AudioSegment
-from pydub.silence import split_on_silence
-# Removed moviepy imports, relying on pydub
-import numpy as np
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 TMP = os.getenv("GITHUB_WORKSPACE", ".") + "/tmp"
 os.makedirs(TMP, exist_ok=True)
 FULL_AUDIO_PATH = os.path.join(TMP, "voice.mp3")
+AUDIO_METADATA = os.path.join(TMP, "audio_metadata.json")
 
-print("✅ Using Local Coqui TTS (offline)")
+# Config (can override via env)
+PRIMARY_MODEL = os.getenv("GARDEN_VOICE_MODEL", "tts_models/en/vctk/vits")
+PRIMARY_SPEAKER = os.getenv("GARDEN_VCTK_SPEAKER", "p226")
+ALT_MODELS = ["tts_models/en/jenny/jenny", "tts_models/en/ljspeech/tacotron2-DDC"]
 
-# --- Utility Functions ---
-import re
+print(f"✅ TTS pipeline init — primary model: {PRIMARY_MODEL} speaker: {PRIMARY_SPEAKER}")
 
-def clean_text_for_tts(text):
-    """
-    Enhanced text preprocessing for natural TTS pronunciation
-    Handles acronyms, technical terms, and special characters
-    """
-    
-    # Step 1: Preserve important punctuation for natural pauses
-    text = text.replace('...', ' pause ')
-    
-    # Step 2: Handle special characters
-    text = text.replace('%', ' percent')
-    text = text.replace('&', ' and ')
-    text = text.replace('+', ' plus ')
-    text = text.replace('@', ' at ')
-    text = text.replace('$', ' dollars ')
-    text = text.replace('€', ' euros ')
-    text = text.replace('£', ' pounds ')
-    text = text.replace('#', ' hashtag ')
-    
-    # Step 3: Handle common acronyms with NATURAL spellings
-    # These work better with most TTS engines than phonemes
-    acronym_replacements = {
-        # AI/ML terms (most important for your use case)
-        r'\bAI\b': 'A I',  # Spell it out clearly
-        r'\bML\b': 'M L',
-        r'\bGPT\b': 'G P T',
-        r'\bLLM\b': 'L L M',
-        r'\bNLP\b': 'N L P',
-        
-        # ChatGPT and variants
-        r'\bChatGPT\b': 'Chat G P T',
-        r'\bchatgpt\b': 'chat G P T',
-        r'\bCHATGPT\b': 'Chat G P T',
-        
-        # Tech companies
-        r'\bAPI\b': 'A P I',
-        r'\bUI\b': 'U I',
-        r'\bUX\b': 'U X',
-        r'\bCEO\b': 'C E O',
-        r'\bCTO\b': 'C T O',
-        
-        # Computer hardware
-        r'\bCPU\b': 'C P U',
-        r'\bGPU\b': 'G P U',
-        r'\bRAM\b': 'ram',  # This is often pronounced as a word
-        r'\bSSD\b': 'S S D',
-        r'\bUSB\b': 'U S B',
-        
-        # Web/Internet
-        r'\bHTTP\b': 'H T T P',
-        r'\bHTTPS\b': 'H T T P S',
-        r'\bURL\b': 'U R L',
-        r'\bHTML\b': 'H T M L',
-        r'\bCSS\b': 'C S S',
-        r'\bJSON\b': 'J son',  # Pronounced as "jay-son"
-        r'\bSQL\b': 'S Q L',
-        r'\bXML\b': 'X M L',
-        
-        # Organizations
-        r'\bNASA\b': 'nasa',  # Pronounced as word
-        r'\bFBI\b': 'F B I',
-        r'\bCIA\b': 'C I A',
-        r'\bUSA\b': 'U S A',
-        r'\bUK\b': 'U K',
-        r'\bUN\b': 'U N',
-        r'\bEU\b': 'E U',
-        
-        # Sports/Entertainment
-        r'\bNBA\b': 'N B A',
-        r'\bNFL\b': 'N F L',
-        r'\bUFC\b': 'U F C',
-        
-        # Units
-        r'\bGB\b': 'gigabytes',
-        r'\bMB\b': 'megabytes',
-        r'\bKB\b': 'kilobytes',
-        r'\bTB\b': 'terabytes',
-        r'\bFPS\b': 'F P S',
-        
-        # Tech/Gaming
-        r'\bVR\b': 'V R',
-        r'\bAR\b': 'A R',
-        r'\bMR\b': 'M R',
-        r'\bDIY\b': 'D I Y',
-        r'\bOK\b': 'okay',
-        r'\bOKay\b': 'okay',
-        
-        # Social Media
-        r'\bDM\b': 'D M',
-        r'\bPM\b': 'P M',
-        r'\bFAQ\b': 'F A Q',
-        r'\bFYI\b': 'F Y I',
-        r'\bTBH\b': 'T B H',
-        r'\bIMO\b': 'I M O',
-        r'\bAFAIK\b': 'A F A I K',
+# -------------------------
+# Text cleaning (gardening)
+# -------------------------
+def clean_text_for_tts(text: str) -> str:
+    """Enhanced text preprocessing for natural TTS pronunciation (gardening-aware)."""
+    if not text:
+        return ""
+
+    # Normalize whitespace
+    text = text.strip()
+
+    # Protect common abbreviations
+    protected_patterns = {
+        r'\bDr\.': 'Doctor',
+        r'\bMr\.': 'Mister',
+        r'\bMrs\.': 'Misses',
+        r'\bMs\.': 'Miss',
+        r'\bProf\.': 'Professor',
+        r'\betc\.': 'etcetera',
+        r'\be\.g\.': 'for example',
+        r'\bi\.e\.': 'that is',
+        r'\bvs\.': 'versus',
     }
-    
-    # Apply all replacements
-    for pattern, replacement in acronym_replacements.items():
-        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
-    
-    # Step 4: Handle numbers with context
-    # "4K video" should be "four K video"
-    text = re.sub(r'\b(\d+)K\b', r'\1 K', text)
-    text = re.sub(r'\b(\d+)x\b', r'\1 times', text)
-    
-    # Step 5: Remove emojis
+    for pat, rep in protected_patterns.items():
+        text = re.sub(pat, rep, text, flags=re.IGNORECASE)
+
+    # Replace ellipses with pause word (optional)
+    text = text.replace("...", " pause ")
+
+    # Treat periods as sentence ends only when followed by space + capital letter
+    text = re.sub(r'\.(\s+[A-Z])', r' SENTENCE_END\1', text)
+    # Remove remaining periods (mid-sentence)
+    text = text.replace(".", "")
+    # Restore sentence-end markers
+    text = text.replace("SENTENCE_END", ".")
+
+    # Special characters common in scripts
+    replacements = {
+        '%': ' percent',
+        '&': ' and ',
+        '+': ' plus ',
+        '@': ' at ',
+        '$': ' dollars ',
+        '€': ' euros ',
+        '£': ' pounds ',
+        '#': ' hashtag ',
+    }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+
+    # Gardening-specific measurement and term handling
+    gardening_repls = {
+        r'(\d+)\s*"\b': r'\1 inches',
+        r'(\d+)\s*\'\b': r'\1 feet',
+        r'\b(\d+)\s*in\b': r'\1 inches',
+        r'\b(\d+)\s*ft\b': r'\1 feet',
+        r'\b(\d+)\s*cm\b': r'\1 centimeters',
+        r'\b(\d+)\s*mm\b': r'\1 millimeters',
+        r'\b(\d+)\s*tbsp\b': r'\1 tablespoons',
+        r'\b(\d+)\s*tsp\b': r'\1 teaspoons',
+        r'\b(\d+)\s*ml\b': r'\1 milliliters',
+        r'\b(\d+)\s*L\b': r'\1 liters',
+        r'\b(\d+)\s*oz\b': r'\1 ounces',
+        r'\b(\d+)\s*lb?s\b': r'\1 pounds',
+        r'\b(\d+)\s*gal\b': r'\1 gallon',
+        r'\b(\d+)\s*°C\b': r'\1 degrees Celsius',
+        r'\b(\d+)\s*°F\b': r'\1 degrees Fahrenheit',
+        r'\bPH\b': 'P H',
+        r'\bpH\b': 'P H',
+        r'\bNPK\b': 'N P K',
+        r'\bEpsom\s+salt\b': 'Epsom salt',
+    }
+    for pat, rep in gardening_repls.items():
+        text = re.sub(pat, rep, text, flags=re.IGNORECASE)
+
+    # Plant-name pronunciation hints (optional — add more as needed)
+    plant_pronunciations = {
+        r'\bPothos\b': 'POH-thos',
+        r'\bMonstera\b': 'mon-STAIR-uh',
+        r'\bPhilodendron\b': 'fil-oh-DEN-dron',
+        r'\bSansevieria\b': 'san-suh-VEER-ee-uh',
+        r'\bFuchsia\b': 'FYOO-shuh',
+    }
+    for pat, rep in plant_pronunciations.items():
+        text = re.sub(pat, rep, text, flags=re.IGNORECASE)
+
+    # Acronyms (keep generic replacements, harmless)
+    acronym_replacements = {
+        r'\bDIY\b': 'D I Y',
+        r'\bLED\b': 'L E D',
+        r'\bUV\b': 'U V',
+    }
+    for pat, rep in acronym_replacements.items():
+        text = re.sub(pat, rep, text, flags=re.IGNORECASE)
+
+    # Remove emojis
     emoji_pattern = re.compile("["
-        "\U0001F600-\U0001F64F"  # emoticons
-        "\U0001F300-\U0001F5FF"  # symbols & pictographs
-        "\U0001F680-\U0001F6FF"  # transport & map symbols
-        "\U0001F1E0-\U0001F1FF"  # flags
-        "\U00002702-\U000027B0"
-        "\U000024C2-\U0001F251"
-        "]+", flags=re.UNICODE)
+        "\U0001F600-\U0001F64F"
+        "\U0001F300-\U0001F5FF"
+        "\U0001F680-\U0001F6FF"
+        "\U0001F1E0-\U0001F1FF"
+        "\u2600-\u26FF\u2700-\u27BF]+", flags=re.UNICODE)
     text = emoji_pattern.sub('', text)
-    
-    # Step 6: Clean up extra whitespace
-    text = re.sub(r'\s+', ' ', text)
-    text = re.sub(r'\s([.,!?])', r'\1', text)  # Remove space before punctuation
-    
-    # Step 7: Ensure sentences end properly for natural pauses
-    text = re.sub(r'([.!?])\s*$', r'\1 ', text)
-    
-    return text.strip()
 
-def generate_tts_fallback(text, out_path):
-    """Fallback TTS using gTTS"""
+    # Collapse multiple whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    # Ensure final sentence punctuation for natural pause
+    if text and text[-1] not in ".!?":
+        text = text + "."
+
+    return text
+
+# -------------------------
+# Fallback helpers
+# -------------------------
+def generate_tts_fallback(text: str, out_path: str) -> str:
+    """Fallback to gTTS (requires internet). Returns path on success."""
     try:
-        print("🔄 Using gTTS fallback...")
+        logging.info("🔄 Using gTTS fallback...")
         from gtts import gTTS
-
-        tts = gTTS(text=text, lang='en', slow=False)
-        tts.save(out_path)
-
-        print(f"✅ gTTS fallback saved to {out_path}")
+        t = gTTS(text=text, lang='en', slow=False)
+        t.save(out_path)
+        logging.info(f"✅ gTTS fallback saved to {out_path}")
         return out_path
-
     except Exception as e:
-        print(f"⚠️ gTTS fallback failed: {e}")
+        logging.warning(f"⚠️ gTTS fallback failed: {e}")
         return generate_silent_audio_fallback(text, out_path)
 
-def generate_silent_audio_fallback(text, out_path):
-    """Generate silent audio as last resort fallback using pydub"""
+def generate_silent_audio_fallback(text: str, out_path: str) -> str:
+    """Create silent audio with duration estimated from word count."""
     try:
-        from pydub import AudioSegment
-        
         words = len(text.split())
-        # Calculate duration in milliseconds (15s min, 60s max)
-        duration_ms = max(15000, min(60000, (words / 150) * 60000))
-        duration_s = duration_ms / 1000.0
-
-        silent_audio = AudioSegment.silent(duration=duration_ms, frame_rate=22050)
-        silent_audio.export(out_path, format="mp3")
-
-        print(f"✅ Silent audio fallback created ({duration_s:.1f}s)")
+        duration_ms = max(15000, min(75000, int((words / 150.0) * 60000)))
+        silent = AudioSegment.silent(duration=duration_ms, frame_rate=22050)
+        silent.export(out_path, format="mp3")
+        logging.info(f"✅ Silent fallback created ({duration_ms/1000:.1f}s) at {out_path}")
         return out_path
-    
     except Exception as e:
-        print(f"❌ All TTS methods failed: {e}")
-        raise Exception("All TTS generation methods failed")
+        logging.error(f"❌ Silent fallback failed: {e}")
+        raise
 
-
-# --- Core Execution ---
-
-script_path = os.path.join(TMP, "script.json")
-if not os.path.exists(script_path):
-    print(f"❌ Script file not found: {script_path}")
-    raise SystemExit(1)
-
-with open(script_path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-
-hook = data.get("hook", "")
-bullets = data.get("bullets", [])
-cta = data.get("cta", "")
-
-spoken_parts = [hook]
-for bullet in bullets:
-    spoken_parts.append(bullet)
-spoken_parts.append(cta)
-spoken = ". ".join([p.strip() for p in spoken_parts if p.strip()]) # Rebuild spoken text safely
-
-print(f"🎙️ Generating voice for text ({len(spoken)} chars)")
-print(f"   Preview: {spoken[:100]}...")
-
-# --- Sectional TTS Generation (Primary Strategy) ---
+# -------------------------
+# TTS helpers
+# -------------------------
+def _tts_to_file(tts_obj, text: str, out_path: str, speaker: str = None):
+    """
+    Robust wrapper around TTS.tts_to_file:
+    - Tries with speaker param if provided (multi-speaker models)
+    - Falls back to calling without speaker argument
+    """
+    try:
+        if speaker:
+            # some models accept 'speaker' — try with it
+            tts_obj.tts_to_file(text=text, file_path=out_path, speaker=speaker)
+        else:
+            tts_obj.tts_to_file(text=text, file_path=out_path)
+    except TypeError:
+        # If model doesn't accept speaker keyword, try without
+        tts_obj.tts_to_file(text=text, file_path=out_path)
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=4, max=30))
 def generate_sectional_tts():
-    """Generates individual TTS files for precise timing and combines them."""
-    section_paths = []
+    """
+    Attempt sectional generation using primary model (VCTK recommended).
+    Falls back to alternative local model(s) and ultimately to gTTS.
+    Returns list of section paths.
+    """
     sections = [("hook", hook)] + [(f"bullet_{i}", b) for i, b in enumerate(bullets)] + [("cta", cta)]
-    
+    section_paths = []
+
+    # Try primary model first
     try:
-        print("🔊 Initializing Coqui TTS for sectional generation...")
-        tts = TTS(model_name="tts_models/en/jenny/jenny", progress_bar=False)
+        logging.info(f"🔊 Loading Coqui model: {PRIMARY_MODEL}")
+        tts = TTS(model_name=PRIMARY_MODEL, progress_bar=False)
+        use_speaker = False
+        try:
+            available_speakers = getattr(tts, "speakers", None)
+            if available_speakers and PRIMARY_SPEAKER in available_speakers:
+                use_speaker = True
+        except Exception:
+            use_speaker = False
+
+        logging.info(f"   -> model loaded. speaker supported: {use_speaker}")
 
         for name, text in sections:
             if not text.strip():
                 continue
-            
-            clean = clean_text_for_coqui(text)
+            clean = clean_text_for_tts(text)
             out_path = os.path.join(TMP, f"{name}.mp3")
-            print(f"🎧 Generating section: {name} (Text: {clean[:40]}...)")
-            
-            tts.tts_to_file(text=clean, file_path=out_path)
-            
+            logging.info(f"🎧 Generating section '{name}' ({len(clean)} chars)...")
+            # If section is long, split by sentences to avoid model issues
+            # but we can just pass in the clean section (coqui handles moderate lengths)
+            _tts_to_file(tts, clean, out_path, speaker=(PRIMARY_SPEAKER if use_speaker else None))
+
             if os.path.exists(out_path) and os.path.getsize(out_path) > 1024:
                 section_paths.append(out_path)
+                logging.info(f"   ✅ saved {out_path}")
             else:
-                raise Exception(f"Coqui section generation failed for {name}")
+                raise Exception(f"Section file missing or too small: {out_path}")
 
-    except Exception as e:
-        print(f"⚠️ Sectional Coqui TTS failed: {e}")
-        print("🔄 Falling back to gTTS with section splitting...")
-        
-        # ✅ FIX: Generate full audio, then split it into sections
-        fallback_path = generate_tts_fallback(spoken, FULL_AUDIO_PATH)
-        
-        if not os.path.exists(fallback_path) or os.path.getsize(fallback_path) < 1000:
-            raise Exception("Fallback audio generation failed")
-        
-        # Split the full audio into sections based on word count proportions
-        print("🔪 Splitting full audio into sections for timing...")
-        full_audio = AudioSegment.from_file(fallback_path)
-        total_duration_ms = len(full_audio)
-        
-        # Calculate proportions based on word count
-        section_texts = [(name, text) for name, text in sections if text.strip()]
-        total_words = sum(len(text.split()) for _, text in section_texts)
-        
-        current_pos = 0
-        section_paths = []
-        
-        for name, text in section_texts:
-            words = len(text.split())
-            proportion = words / total_words if total_words > 0 else 1.0 / len(section_texts)
-            section_duration_ms = int(total_duration_ms * proportion)
-            
-            # Extract section
-            section_audio = full_audio[current_pos:current_pos + section_duration_ms]
-            section_path = os.path.join(TMP, f"{name}.mp3")
-            section_audio.export(section_path, format="mp3")
-            
-            section_paths.append(section_path)
-            current_pos += section_duration_ms
-            
-            print(f"   ✅ {name}: {section_duration_ms/1000:.2f}s")
-        
-        print("✅ Sections created from fallback audio")
+        # Combine sections with short pauses (gardening needs slightly longer pauses for clarity)
+        combined = AudioSegment.silent(duration=0)
+        for i, path in enumerate(section_paths):
+            part = AudioSegment.from_file(path)
+            pause_ms = 200 if i < len(section_paths) - 1 else 0
+            combined += part + AudioSegment.silent(duration=pause_ms)
+
+        combined.export(FULL_AUDIO_PATH, format="mp3")
+        logging.info(f"✅ Combined TTS exported to {FULL_AUDIO_PATH}")
         return section_paths
 
-    # Combine sections (original logic continues)
-    combined_audio = AudioSegment.silent(duration=0)
-    for path in section_paths:
+    except Exception as primary_err:
+        logging.warning(f"⚠️ Primary model failed: {primary_err}")
+
+    # Try alternative local models
+    for alt in ALT_MODELS:
+        try:
+            logging.info(f"🔁 Trying alternative model: {alt}")
+            tts_alt = TTS(model_name=alt, progress_bar=False)
+            section_paths = []
+            for name, text in sections:
+                if not text.strip():
+                    continue
+                clean = clean_text_for_tts(text)
+                out_path = os.path.join(TMP, f"{name}.mp3")
+                logging.info(f"🎧 Generating with alt model '{alt}': {name}")
+                _tts_to_file(tts_alt, clean, out_path, speaker=None)
+                if os.path.exists(out_path) and os.path.getsize(out_path) > 1024:
+                    section_paths.append(out_path)
+                else:
+                    raise Exception(f"Alt model failed creating {out_path}")
+            # Combine
+            combined = AudioSegment.silent(duration=0)
+            for i, path in enumerate(section_paths):
+                part = AudioSegment.from_file(path)
+                pause_ms = 200 if i < len(section_paths) - 1 else 0
+                combined += part + AudioSegment.silent(duration=pause_ms)
+            combined.export(FULL_AUDIO_PATH, format="mp3")
+            logging.info(f"✅ Combined (alt) TTS exported to {FULL_AUDIO_PATH}")
+            return section_paths
+        except Exception as e:
+            logging.warning(f"⚠️ Alt model {alt} failed: {e}")
+            continue
+
+    # Final fallback: generate single full audio with gTTS and split proportionally
+    logging.info("🔄 Falling back to gTTS / split-on-proportion approach")
+    fallback_path = generate_tts_fallback(spoken, FULL_AUDIO_PATH)
+    if not os.path.exists(fallback_path) or os.path.getsize(fallback_path) < 1000:
+        raise Exception("Final fallback audio not created")
+
+    full_audio = AudioSegment.from_file(fallback_path)
+    total_ms = len(full_audio)
+    section_texts = [(name, text) for name, text in sections if text.strip()]
+    total_words = sum(len(t.split()) for _, t in section_texts) or 1
+
+    current_pos = 0
+    section_paths = []
+    for name, text in section_texts:
+        words = len(text.split())
+        proportion = words / total_words
+        dur_ms = max(500, int(total_ms * proportion))
+        seg = full_audio[current_pos:current_pos + dur_ms]
+        out_path = os.path.join(TMP, f"{name}.mp3")
+        seg.export(out_path, format="mp3")
+        section_paths.append(out_path)
+        current_pos += dur_ms
+
+    # Recombine to main file
+    combined = AudioSegment.silent(duration=0)
+    for i, path in enumerate(section_paths):
         part = AudioSegment.from_file(path)
-        combined_audio += part + AudioSegment.silent(duration=150)
-        
-    combined_audio.export(FULL_AUDIO_PATH, format="mp3")
-    print(f"✅ Combined TTS saved to {FULL_AUDIO_PATH}")
-    
+        pause_ms = 200 if i < len(section_paths) - 1 else 0
+        combined += part + AudioSegment.silent(duration=pause_ms)
+    combined.export(FULL_AUDIO_PATH, format="mp3")
+
+    logging.info("✅ Sections created from fallback gTTS and combined")
     return section_paths
 
+# -------------------------
+# Main
+# -------------------------
+if __name__ == "__main__":
+    # Load script.json
+    script_path = os.path.join(TMP, "script.json")
+    if not os.path.exists(script_path):
+        logging.error(f"❌ Missing script file: {script_path}")
+        raise SystemExit(1)
 
-    # Combine them (with short pauses) to make the main voice.mp3
-    combined_audio = AudioSegment.silent(duration=0)
-    for path in section_paths:
-        part = AudioSegment.from_file(path)
-        # Add 150ms pause between sections
-        combined_audio += part + AudioSegment.silent(duration=150)
-        
-    combined_audio.export(FULL_AUDIO_PATH, format="mp3")
-    print(f"✅ Combined TTS saved to {FULL_AUDIO_PATH}")
-    
-    return section_paths
+    with open(script_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
 
-try:
-    # 1. Execute the generation process
-    section_paths = generate_sectional_tts()
+    hook = data.get("hook", "")
+    bullets = data.get("bullets", [])
+    cta = data.get("cta", "")
 
-    # 2. Verify the final combined audio (or the single fallback file) using pydub
-    final_audio_path = FULL_AUDIO_PATH
-    
-    audio_check = AudioSegment.from_file(final_audio_path)
-    actual_duration = audio_check.duration_seconds # Duration in seconds
-    
-    file_size = os.path.getsize(final_audio_path) / 1024
-    print(f"🎵 Actual audio duration: {actual_duration:.2f} seconds")
+    # Build spoken text
+    spoken_parts = [p.strip() for p in [hook] + bullets + [cta] if p and p.strip()]
+    spoken = ". ".join(spoken_parts)
+    logging.info(f"🎙️ Preparing TTS for {len(spoken)} chars. Preview: {spoken[:120]}...")
 
-    if actual_duration > 120:
-        print(f"⚠️ Audio duration too long ({actual_duration:.1f}s), forcing gTTS fallback...")
-        generate_tts_fallback(spoken, FULL_AUDIO_PATH) # Overwrite with gTTS
-        
-        audio_check = AudioSegment.from_file(FULL_AUDIO_PATH)
-        actual_duration = audio_check.duration_seconds
-        print(f"🎵 Fixed audio duration: {actual_duration:.2f} seconds")
+    try:
+        section_paths = generate_sectional_tts()
 
-    words = len(spoken.split())
-    estimated_duration = (words / 150) * 60
+        # Verify final audio
+        if not os.path.exists(FULL_AUDIO_PATH):
+            raise Exception("Final audio not produced")
 
-    print(f"📊 Text stats: {words} words, estimated: {estimated_duration:.1f}s, actual: {actual_duration:.1f}s")
+        audio = AudioSegment.from_file(FULL_AUDIO_PATH)
+        actual_duration = audio.duration_seconds
+        file_size_kb = os.path.getsize(FULL_AUDIO_PATH) / 1024.0
 
-    metadata = {
-        "text": spoken,
-        "words": words,
-        "estimated_duration": estimated_duration,
-        "actual_duration": actual_duration,
-        "file_size_kb": file_size,
-        # Determine final provider
-        "tts_provider": "coqui_sectional" if len(section_paths) > 1 else "gtts_fallback_full",
-    }
+        # Duration checks tuned to PRD: target 45-75s for gardening shorts
+        if actual_duration > 75:
+            logging.warning(f"⚠️ Audio too long ({actual_duration:.1f}s) — forcing fallback gTTS")
+            generate_tts_fallback(spoken, FULL_AUDIO_PATH)
+            audio = AudioSegment.from_file(FULL_AUDIO_PATH)
+            actual_duration = audio.duration_seconds
 
-    with open(os.path.join(TMP, "audio_metadata.json"), "w") as f:
-        json.dump(metadata, f, indent=2)
+        words = len(spoken.split())
+        estimated_duration = (words / 150.0) * 60.0
 
-except Exception as e:
-    print(f"❌ TTS generation failed: {e}")
-    raise SystemExit(1)
+        metadata = {
+            "text": spoken,
+            "words": words,
+            "estimated_duration": estimated_duration,
+            "actual_duration": actual_duration,
+            "file_size_kb": round(file_size_kb, 2),
+            "tts_provider": PRIMARY_MODEL,
+            "model_info": {
+                "selected_primary": PRIMARY_MODEL,
+                "speaker": PRIMARY_SPEAKER
+            },
+            "content_type": "gardening",
+            "optimal_duration_met": 45 <= actual_duration <= 75
+        }
 
-print("✅ TTS generation complete")
+        with open(AUDIO_METADATA, "w", encoding="utf-8") as mf:
+            json.dump(metadata, mf, indent=2)
+
+        logging.info(f"📊 Audio duration: {actual_duration:.1f}s  words: {words}  file: {FULL_AUDIO_PATH}")
+        logging.info(f"✅ TTS generation complete; metadata saved: {AUDIO_METADATA}")
+    except Exception as e:
+        logging.error(f"❌ TTS generation failed: {e}")
+        raise SystemExit(1)

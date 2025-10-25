@@ -321,45 +321,77 @@ def categorize_video(video_metadata, niche):
 def add_video_to_playlist(youtube, video_id, playlist_id):
     """
     Add video to playlist only if it's not already there.
+    Handles newly created playlists with retry logic.
     """
-    # Get existing videos in playlist
+    import time
+    
+    # Get existing videos in playlist with retry for newly created playlists
     existing_videos = set()
-    nextPageToken = None
-    while True:
-        request = youtube.playlistItems().list(
-            part="snippet",
-            playlistId=playlist_id,
-            maxResults=50,
-            pageToken=nextPageToken
-        )
-        response = request.execute()
-        for item in response.get("items", []):
-            existing_videos.add(item["snippet"]["resourceId"]["videoId"])
-        nextPageToken = response.get("nextPageToken")
-        if not nextPageToken:
+    max_retries = 3
+    
+    for attempt in range(max_retries):
+        try:
+            nextPageToken = None
+            while True:
+                request = youtube.playlistItems().list(
+                    part="snippet",
+                    playlistId=playlist_id,
+                    maxResults=50,
+                    pageToken=nextPageToken
+                )
+                response = request.execute()
+                for item in response.get("items", []):
+                    existing_videos.add(item["snippet"]["resourceId"]["videoId"])
+                nextPageToken = response.get("nextPageToken")
+                if not nextPageToken:
+                    break
+            # Success - break out of retry loop
             break
+            
+        except HttpError as e:
+            if e.resp.status == 404 and attempt < max_retries - 1:
+                # Playlist not found - likely just created, wait and retry
+                wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                print(f"      ⏳ Playlist not ready yet, waiting {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait_time)
+            else:
+                # Final attempt failed or different error
+                print(f"      ⚠️ Could not check existing videos: {e}")
+                # Continue anyway to try adding the video
+                break
 
     if video_id in existing_videos:
         print("      ℹ️ Video already in playlist, skipping")
         return False
 
-    # Add video
-    try:
-        youtube.playlistItems().insert(
-            part="snippet",
-            body={
-                "snippet": {
-                    "playlistId": playlist_id,
-                    "resourceId": {"kind": "youtube#video", "videoId": video_id}
+    # Add video with retry logic
+    for attempt in range(max_retries):
+        try:
+            youtube.playlistItems().insert(
+                part="snippet",
+                body={
+                    "snippet": {
+                        "playlistId": playlist_id,
+                        "resourceId": {"kind": "youtube#video", "videoId": video_id}
+                    }
                 }
-            }
-        ).execute()
-        print("      ✅ Added to playlist")
-        return True
+            ).execute()
+            print("      ✅ Added to playlist")
+            return True
 
-    except Exception as e:
-        print(f"      ❌ Failed to add video: {e}")
-        return False
+        except HttpError as e:
+            if e.resp.status == 404 and attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                print(f"      ⏳ Playlist not ready, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait_time)
+            else:
+                print(f"      ❌ Failed to add video: {e}")
+                return False
+        except Exception as e:
+            print(f"      ❌ Failed to add video: {e}")
+            return False
+    
+    return False
 
 def organize_playlists(youtube, history, config, niche):
     """Main function to organize videos into playlists"""

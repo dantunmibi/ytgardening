@@ -1,32 +1,27 @@
 # 🌱 Garden Glow Up - Automated Gardening Shorts Pipeline
 # Python Dependencies
-
-# Core AI/ML
-google-generativeai>=0.3.0
-TTS>=0.22.0
-
-# YouTube API
-google-auth>=2.23.0
-google-auth-oauthlib>=1.1.0
-google-auth-httplib2>=0.1.1
-google-api-python-client>=2.100.0
-
-# Video/Audio Processing
-moviepy>=1.0.3
-pydub>=0.25.1
-pillow>=10.0.0
-numpy>=1.24.0
-
-# Image Generation
-requests>=2.31.0
-
-# Text Processing & Utilities
-tenacity>=8.2.3
-python-dotenv>=1.0.0
-
-# Optional: gTTS fallback for voice generation
-gtts>=2.4.0
-
 # System utilities
 setuptools>=68.0.0
 wheel>=0.41.0
+
+google-generativeai
+requests
+beautifulsoup4
+moviepy
+google-api-python-client
+google-auth
+Pillow
+python-dotenv
+tenacity
+pytrends
+gtts
+TTS
+pydub
+mutagen
+
+facebook-sdk
+cloudinary
+requests-toolbelt
+
+pytz
+urllib3>=1.26.18

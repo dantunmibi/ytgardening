@@ -74,6 +74,10 @@ def clean_text_for_tts(text: str) -> str:
         '#': ' hashtag ',
         '...': ' ',
         '-': ' to ',
+        'PM': 'P M',
+        'am': 'A M',
+        'AM': 'A M',
+        'pm': 'P M',
     }
     for k, v in replacements.items():
         text = text.replace(k, v)

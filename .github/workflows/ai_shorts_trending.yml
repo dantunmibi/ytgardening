@@ -18,38 +18,39 @@ on:
         type: boolean
         default: false
   schedule:
-  # 🌱 GARDENING-OPTIMAL POSTING SCHEDULE (EST-based)
-  # Using data from optimal_scheduler.py - gardener peak activity times
+  # 🌱 GARDENING-OPTIMAL POSTING SCHEDULE (WAT - West Africa Time)
+  # Converted to UTC for GitHub crons
+  # WAT = UTC+1, so subtract 1 hour from WAT time to get UTC
   
-  # Monday: 6 PM (evening planning), 8 PM (inspiration)
-  - cron: '0 23 * * 1'   # 6 PM EST - Evening planning
-  - cron: '0 1 * * 2'    # 8 PM EST - Inspiration content
+  # Monday: 6 PM WAT, 8 PM WAT
+  - cron: '0 17 * * 1'    # 6 PM WAT = 5 PM UTC
+  - cron: '0 19 * * 1'    # 8 PM WAT = 7 PM UTC
   
-  # Tuesday: 12 PM (quick tips), 6:30 PM (problem solving) - HIGHEST priority
-  - cron: '0 17 * * 2'   # 12 PM EST - Quick tips
-  - cron: '0 23 * * 2'   # 6:30 PM EST - Problem solving
+  # Tuesday: 12 PM WAT (HIGH), 6:30 PM WAT
+  - cron: '0 11 * * 2'    # 12 PM WAT = 11 AM UTC - HIGHEST PRIORITY
+  - cron: '0 17 * * 2'    # 6:30 PM WAT = 5:30 PM UTC
   
-  # Wednesday: 4 PM (propagation), 7 PM (trending hack) - BEST WEEKDAY
-  - cron: '0 21 * * 3'   # 4 PM EST - Propagation content
-  - cron: '0 0 * * 4'    # 7 PM EST - Trending hack
+  # Wednesday: 4 PM WAT (BEST WEEKDAY), 7 PM WAT
+  - cron: '0 15 * * 3'    # 4 PM WAT = 3 PM UTC
+  - cron: '0 18 * * 3'    # 7 PM WAT = 6 PM UTC
   
-  # Thursday: 5 PM (weekend prep), 7:30 PM (seasonal tips)
-  - cron: '0 22 * * 4'   # 5 PM EST - Weekend prep
-  - cron: '0 0 * * 5'    # 7:30 PM EST - Seasonal tips
+  # Thursday: 5 PM WAT, 7:30 PM WAT
+  - cron: '0 16 * * 4'    # 5 PM WAT = 4 PM UTC
+  - cron: '0 18 * * 4'    # 7:30 PM WAT = 6:30 PM UTC
   
-  # Friday: 5 PM (weekend projects), 7 PM (inspiration)
-  - cron: '0 22 * * 5'   # 5 PM EST - Weekend projects
-  - cron: '0 0 * * 6'    # 7 PM EST - Inspiration
+  # Friday: 5 PM WAT, 7 PM WAT
+  - cron: '0 16 * * 5'    # 5 PM WAT = 4 PM UTC
+  - cron: '0 18 * * 5'    # 7 PM WAT = 6 PM UTC
   
-  # Saturday: 9 AM (morning routine), 2 PM (weekend project), 6 PM (harvest) - PRIME DAY
-  - cron: '0 14 * * 6'   # 9 AM EST - Morning routine
-  - cron: '0 19 * * 6'   # 2 PM EST - Weekend project
-  - cron: '0 23 * * 6'   # 6 PM EST - Harvest showcase
+  # Saturday: 9 AM WAT (PRIME), 2 PM WAT, 6 PM WAT
+  - cron: '0 8 * * 6'     # 9 AM WAT = 8 AM UTC - PRIME TIME
+  - cron: '0 13 * * 6'    # 2 PM WAT = 1 PM UTC
+  - cron: '0 17 * * 6'    # 6 PM WAT = 5 PM UTC
   
-  # Sunday: 10 AM (sunday garden), 3 PM (weekly planning), 7 PM (relaxation) - SECOND BEST
-  - cron: '0 15 * * 0'   # 10 AM EST - Sunday garden
-  - cron: '0 20 * * 0'   # 3 PM EST - Weekly planning
-  - cron: '0 0 * * 1'    # 7 PM EST - Relaxation
+  # Sunday: 10 AM WAT (SECOND BEST), 3 PM WAT, 7 PM WAT
+  - cron: '0 9 * * 0'     # 10 AM WAT = 9 AM UTC - SECOND BEST
+  - cron: '0 14 * * 0'    # 3 PM WAT = 2 PM UTC
+  - cron: '0 18 * * 0'    # 7 PM WAT = 6 PM UTC
 
 jobs:
   build_and_upload:

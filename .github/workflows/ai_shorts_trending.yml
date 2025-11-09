@@ -43,12 +43,11 @@ on:
   - cron: '0 18 * * 5'    # 7 PM WAT = 6 PM UTC
   
   # Saturday: 9 AM WAT (PRIME), 2 PM WAT, 6 PM WAT
-  - cron: '0 8 * * 6'     # 9 AM WAT = 8 AM UTC - PRIME TIME
-  - cron: '0 13 * * 6'    # 2 PM WAT = 1 PM UTC
-  - cron: '0 17 * * 6'    # 6 PM WAT = 5 PM UTC
+  - cron: '0 3 * * 6'     # 9 AM WAT = 8 AM UTC - PRIME TIME
+  - cron: '0 10 * * 6'    # 2 PM WAT = 1 PM UTC
+  
   
   # Sunday: 10 AM WAT (SECOND BEST), 3 PM WAT, 7 PM WAT
-  - cron: '0 9 * * 0'     # 10 AM WAT = 9 AM UTC - SECOND BEST
   - cron: '0 14 * * 0'    # 3 PM WAT = 2 PM UTC
   - cron: '0 18 * * 0'    # 7 PM WAT = 6 PM UTC
 
@@ -257,6 +256,14 @@ jobs:
           restore-keys: |
             platform-config-gardening-
             platform-config-
+
+      - name: ♻️ Restore topic ranking history
+        uses: actions/cache/restore@v4
+        with:
+          path: tmp/topic_rank_history.json
+          key: gardening-topic-rank-history-${{ github.run_number }}
+          restore-keys: |
+            gardening-topic-rank-history-
 
       - name: 📚 Restore playlist config
         if: steps.schedule_check.outputs.should_post == 'true'
@@ -534,6 +541,13 @@ jobs:
         with:
           path: tmp/playlist_config.json
           key: playlist-config-gardening-${{ github.run_number }}
+
+      - name: 💾 Save topic ranking history
+        uses: actions/cache/save@v4
+        if: success()
+        with:
+          path: tmp/topic_rank_history.json
+          key: gardening-topic-rank-history-${{ github.run_number }}
 
       - name: 💾 Save gardening content history
         uses: actions/cache/save@v4

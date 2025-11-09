@@ -49,6 +49,36 @@ def load_history():
     print("📂 No previous history found, starting fresh")
     return {'topics': []}
 
+TOPIC_RANK_HISTORY_FILE = os.path.join(TMP, "topic_rank_history.json")
+
+def load_ranked_title_history() -> list:
+    if os.path.exists(TOPIC_RANK_HISTORY_FILE):
+        try:
+            with open(TOPIC_RANK_HISTORY_FILE, 'r', encoding='utf-8') as f:
+                return [t["title"].lower() for t in json.load(f)]
+        except Exception as e:
+            print(f"⚠️ Failed to load ranked topic history: {e}")
+    return []
+
+def save_ranked_titles(topics: list):
+    try:
+        if not topics:
+            return
+
+        existing = []
+        if os.path.exists(TOPIC_RANK_HISTORY_FILE):
+            with open(TOPIC_RANK_HISTORY_FILE, 'r', encoding='utf-8') as f:
+                existing = json.load(f)
+
+        existing.extend({"title": t, "timestamp": datetime.now().isoformat()} for t in topics)
+        existing = existing[-100:]  # keep last 100
+
+        with open(TOPIC_RANK_HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(existing, f, indent=2)
+        print(f"💾 Topic title history updated: {len(existing)} total")
+    except Exception as e:
+        print(f"⚠️ Failed to save ranked titles: {e}")
+
 def save_to_history(topic, script_hash, title):
     """Save to history file"""
     history = load_history()
@@ -116,25 +146,44 @@ trending = load_trending()
 previous_topics = [f"{t.get('topic', 'unknown')}: {t.get('title', '')}" for t in history['topics'][-15:]]
 previous_titles = [t.get('title', '') for t in history['topics']]
 
-# ✅ CRITICAL: Extract real trending gardening topics and FORCE their use
+# Load ranked topic history
+used_titles = set(load_ranked_title_history())
+
 trending_topics = []
 trending_summaries = []
+new_titles = []
 
 if trending and trending.get('topics'):
-    trending_topics = trending['topics'][:5]
-    
-    # Get full data if available
     full_data = trending.get('full_data', [])
-    if full_data:
-        for item in full_data[:5]:
-            trending_summaries.append(f"• {item['topic_title']}: {item.get('summary', 'No summary')}")
+
+    for item in full_data:
+        title = item.get("topic_title", "").strip()
+        if not title:
+            continue
+
+        title_lower = title.lower()
+
+        # 🧠 Compare against previously used topics
+        too_similar = any(
+            len(set(title_lower.split()) & set(prev.split())) / len(set(title_lower.split()) | set(prev.split())) > 0.55
+            for prev in used_titles
+        )
+
+        if too_similar:
+            print(f"⚠️ Skipping repeated or similar idea: '{title}'")
+            continue
+
+        trending_topics.append(title)
+        trending_summaries.append(f"• {title}: {item.get('summary', '')}")
+        new_titles.append(title)
+
+    if new_titles:
+        save_ranked_titles(new_titles)
+
+    if trending_topics:
+        print(f"✅ Loaded {len(trending_topics)} NEW trending ideas after filtering")
     else:
-        trending_summaries = [f"• {t}" for t in trending_topics]
-    
-    print(f"🌱 Loaded {len(trending_topics)} REAL trending gardening topics from web sources")
-    print(f"   Source: {trending.get('source', 'unknown')}")
-else:
-    print("⚠️ No trending data found - will use fallback")
+        print(f"⚠️ All Gemini ideas were repeats; fallback will be used")
 
 # Build mandatory trending section
 if trending_topics:

@@ -1,17 +1,19 @@
-import json
-import time
-import random
-from typing import List, Dict, Any
+# .github/scripts/generate_trending_and_script.py (GARDENING VERSION)
 import os
+import json
+import re
+import hashlib
+from datetime import datetime
 import google.generativeai as genai
-import requests
-from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
+from tenacity import retry, stop_after_attempt, wait_exponential
 
-# Configure using the same pattern as your working script
+TMP = os.getenv("GITHUB_WORKSPACE", ".") + "/tmp"
+
+os.makedirs(TMP, exist_ok=True)
+HISTORY_FILE = os.path.join(TMP, "content_history.json")
+
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-# Use the same model selection logic as your working script
 try:
     models = genai.list_models()
     model_name = None
@@ -32,438 +34,498 @@ except Exception as e:
     print(f"⚠️ Error listing models: {e}")
     model = genai.GenerativeModel("models/gemini-1.5-flash")
 
-TMP = os.getenv("GITHUB_WORKSPACE", ".") + "/tmp"
-os.makedirs(TMP, exist_ok=True)
-
-
-def get_google_trends_gardening() -> List[str]:
-    """Get real trending gardening searches from Google Trends (FREE - no API key needed)"""
-    try:
-        from pytrends.request import TrendReq
-        
-        print(f"🌱 Fetching Google Trends (Gardening)...")
-        
-        # Simplified initialization - let pytrends handle its own defaults
+def load_history():
+    """Load history from previous run (if available)"""
+    if os.path.exists(HISTORY_FILE):
         try:
-            pytrends = TrendReq(hl='en-US', tz=360)
-        except Exception as init_error:
-            print(f"   ⚠️ PyTrends initialization failed: {init_error}")
-            return []
-        
-        relevant_trends = []
-        
-        # Try specific gardening-related keyword searches
-        gardening_topics = [
-            'indoor plants', 
-            'vegetable garden', 
-            'plant propagation', 
-            'houseplants',
-            'gardening tips'
-        ]
-        
-        for topic in gardening_topics:
-            try:
-                print(f"   🔍 Searching trends for: {topic}")
-                pytrends.build_payload([topic], timeframe='now 7-d', geo='')
-                related = pytrends.related_queries()
-                
-                if topic in related and 'top' in related[topic]:
-                    top_queries = related[topic]['top']
-                    if top_queries is not None and not top_queries.empty:
-                        for query in top_queries['query'].head(5):
-                            if len(query) > 10:  # Filter very short queries
-                                relevant_trends.append(query)
-                                print(f"      ✓ {query}")
-                
-                time.sleep(2)  # Rate limiting between requests
-                
-            except Exception as e:
-                print(f"   ⚠️ Failed for '{topic}': {str(e)[:50]}...")
-                continue
-        
-        print(f"✅ Found {len(relevant_trends)} gardening-related trends from Google")
-        return relevant_trends[:15]
-        
-    except ImportError:
-        print("⚠️ pytrends not installed - run: pip install pytrends")
-        return []
-    except Exception as e:
-        print(f"⚠️ Google Trends failed: {e}")
-        return []
+            with open(HISTORY_FILE, 'r') as f:
+                history = json.load(f)
+                print(f"📂 Loaded {len(history.get('topics', []))} topics from history")
+                return history
+        except Exception as e:
+            print(f"⚠️ Could not load history: {e}")
+            return {'topics': []}
+    
+    print("📂 No previous history found, starting fresh")
+    return {'topics': []}
 
+TOPIC_RANK_HISTORY_FILE = os.path.join(TMP, "topic_rank_history.json")
 
-def get_gardening_news_rss() -> List[str]:
-    """Scrape latest gardening news from RSS feeds (FREE)"""
+def load_ranked_title_history() -> list:
+    if os.path.exists(TOPIC_RANK_HISTORY_FILE):
+        try:
+            with open(TOPIC_RANK_HISTORY_FILE, 'r', encoding='utf-8') as f:
+                return [t["title"].lower() for t in json.load(f)]
+        except Exception as e:
+            print(f"⚠️ Failed to load ranked topic history: {e}")
+    return []
+
+def save_ranked_titles(topics: list):
     try:
-        print("🌿 Fetching gardening news from RSS feeds...")
-        
-        # Working gardening RSS feeds (verified October 2024)
-        rss_sources = [
-            'https://www.finegardening.com/feed',
-            'https://savvygardening.com/feed/',
-            'https://empressofdirt.net/feed/',
-            'https://plantcaretoday.com/feed',
-            'https://www.gardenersworld.com/feed/',
-            'https://www.gardeningchannel.com/feed/',
-            'https://growagoodlife.com/feed/',
+        if not topics:
+            return
 
-        ]
-        
-        headlines = []
-        
-        for feed_url in rss_sources:
-            try:
-                print(f"   📡 Fetching {feed_url}...")
-                response = requests.get(feed_url, timeout=15, headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                })
-                
-                if response.status_code != 200:
-                    print(f"      ⚠️ Status {response.status_code}")
-                    continue
-                
-                # Try both XML and HTML parsing
-                try:
-                    soup = BeautifulSoup(response.content, 'xml')
-                except:
-                    soup = BeautifulSoup(response.content, 'html.parser')
-                
-                # Try multiple title tag patterns
-                items = soup.find_all('item')
-                if not items:
-                    items = soup.find_all('entry')  # Atom format
-                
-                print(f"      Found {len(items)} items")
-                
-                for item in items[:15]:
-                    title = None
-                    
-                    # Try different title extraction methods
-                    if item.find('title'):
-                        title = item.find('title').text.strip()
-                    elif item.find('content'):
-                        title = item.find('content').text.strip()[:100]
-                    
-                    if title and len(title) > 15:
-                        # More permissive filtering
-                        gardening_words = [
-                            'plant', 'grow', 'garden', 'seed', 'soil', 'water',
-                            'flower', 'vegetable', 'herb', 'tree', 'pest', 'fertilizer',
-                            'compost', 'prune', 'harvest', 'propagat', 'cutting', 'root',
-                            'tips', 'how to', 'guide', 'best', 'easy'
-                        ]
-                        
-                        headline_lower = title.lower()
-                        if any(kw in headline_lower for kw in gardening_words):
-                            headlines.append(title)
-                            print(f"      ✓ {title[:60]}...")
-                
-            except Exception as e:
-                print(f"   ⚠️ Failed to fetch {feed_url}: {str(e)[:50]}...")
-                continue
-        
-        print(f"✅ Found {len(headlines)} relevant gardening headlines")
-        return headlines[:15]
-        
+        existing = []
+        if os.path.exists(TOPIC_RANK_HISTORY_FILE):
+            with open(TOPIC_RANK_HISTORY_FILE, 'r', encoding='utf-8') as f:
+                existing = json.load(f)
+
+        existing.extend({"title": t, "timestamp": datetime.now().isoformat()} for t in topics)
+        existing = existing[-100:]  # keep last 100
+
+        with open(TOPIC_RANK_HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(existing, f, indent=2)
+        print(f"💾 Topic title history updated: {len(existing)} total")
     except Exception as e:
-        print(f"⚠️ RSS feed scraping failed: {e}")
-        return []
+        print(f"⚠️ Failed to save ranked titles: {e}")
 
+def save_to_history(topic, script_hash, title):
+    """Save to history file"""
+    history = load_history()
+    
+    history['topics'].append({
+        'topic': topic,
+        'title': title,
+        'hash': script_hash,
+        'date': datetime.now().isoformat()
+    })
+    
+    history['topics'] = history['topics'][-100:]
+    
+    with open(HISTORY_FILE, 'w') as f:
+        json.dump(history, f, indent=2)
+    
+    print(f"💾 Saved to history ({len(history['topics'])} total topics)")
 
-def get_reddit_gardening_trends() -> List[str]:
-    """Get trending posts from gardening subreddits (FREE - no API key)"""
-    try:
-        print("🌺 Fetching Reddit gardening trends...")
+def get_content_hash(data):
+    """Generate hash of content to detect duplicates"""
+    content = json.dumps(data, sort_keys=True)
+    return hashlib.md5(content.encode()).hexdigest()
+
+def load_trending():
+    """Load trending topics from fetch_trending.py"""
+    trending_file = os.path.join(TMP, "trending.json")
+    if os.path.exists(trending_file):
+        with open(trending_file, 'r') as f:
+            return json.load(f)
+    return None
+
+def is_similar_topic(new_title, previous_titles, similarity_threshold=0.6):
+    """Check if topic is too similar to previous ones with decay factor"""
+    new_words = set(new_title.lower().split())
+    
+    for idx, prev_title in enumerate(reversed(previous_titles)):
+        prev_words = set(prev_title.lower().split())
         
-        subreddits = ['gardening', 'houseplants', 'vegetablegardening', 'indoorgarden', 'proplifting']
-        trends = []
+        intersection = len(new_words & prev_words)
+        union = len(new_words | prev_words)
         
-        for subreddit in subreddits:
-            try:
-                url = f'https://www.reddit.com/r/{subreddit}/hot.json?limit=20'
-                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-                
-                print(f"   📱 Fetching r/{subreddit}...")
-                response = requests.get(url, headers=headers, timeout=10)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    posts_found = 0
-                    
-                    for post in data['data']['children'][:15]:
-                        title = post['data']['title']
-                        
-                        # STRICT filtering: Only accept informational/tutorial content
-                        good_phrases = [
-                            'how to', 'how i', 'guide to', 'tips for', 'method for',
-                            'update:', 'progress:', 'before and after', 'success:',
-                            'hack:', 'technique', 'tutorial', 'diy', 'made this'
-                        ]
-                        
-                        # Reject questions and help requests
-                        bad_phrases = [
-                            '?', 'help', 'dying', 'is this', 'what is', 'should i',
-                            'why is', 'can i', 'will this', 'does this', 'am i',
-                            'please', 'worried', 'concerned', 'wrong with', 'problem'
-                        ]
-                        
-                        title_lower = title.lower()
-                        
-                        # Must have good phrase AND no bad phrases
-                        has_good = any(phrase in title_lower for phrase in good_phrases)
-                        has_bad = any(phrase in title_lower for phrase in bad_phrases)
-                        
-                        if has_good and not has_bad:
-                            trends.append(title)
-                            posts_found += 1
-                            print(f"      ✓ {title[:70]}...")
-                    
-                    print(f"      Found {posts_found} tutorial/guide posts")
-                else:
-                    print(f"      ⚠️ Status {response.status_code}")
-                
-                time.sleep(2)  # Respectful rate limiting
-                
-            except Exception as e:
-                print(f"   ⚠️ Failed to fetch r/{subreddit}: {e}")
-                continue
-        
-        print(f"✅ Found {len(trends)} trending gardening topics from Reddit")
-        return trends[:15]
-        
-    except Exception as e:
-        print(f"⚠️ Reddit scraping failed: {e}")
-        return []
+        if union > 0:
+            base_similarity = intersection / union
+            decay_factor = 1.0 / (1.0 + idx * 0.02)
+            adjusted_threshold = similarity_threshold * decay_factor
+            
+            if base_similarity > adjusted_threshold:
+                days_ago = idx // 1
+                print(f"⚠️ Topic too similar ({base_similarity:.2f} > {adjusted_threshold:.2f}) to: {prev_title}")
+                print(f"   (from {days_ago} days ago)")
+                return True
+    
+    return False
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def generate_script_with_retry(prompt):
+    response = model.generate_content(prompt)
+    return response.text.strip()
+
+# Load history and trending
+history = load_history()
+trending = load_trending()
+
+# Get previous topics
+previous_topics = [f"{t.get('topic', 'unknown')}: {t.get('title', '')}" for t in history['topics'][-15:]]
+previous_titles = [t.get('title', '') for t in history['topics']]
+
+# Load ranked topic history
+used_titles = set(load_ranked_title_history())
+
+trending_topics = []
+trending_summaries = []
+new_titles = []
+
+if trending and trending.get('topics'):
+    full_data = trending.get('full_data', [])
+
+    for item in full_data:
+        title = item.get("topic_title", "").strip()
+        if not title:
+            continue
+
+        title_lower = title.lower()
+
+        # 🧠 Compare against previously used topics
+        too_similar = any(
+            len(set(title_lower.split()) & set(prev.split())) / len(set(title_lower.split()) | set(prev.split())) > 0.55
+            for prev in used_titles
+        )
+
+        if too_similar:
+            print(f"⚠️ Skipping repeated or similar idea: '{title}'")
+            continue
+
+        trending_topics.append(title)
+        trending_summaries.append(f"• {title}: {item.get('summary', '')}")
+        new_titles.append(title)
+
+    if new_titles:
+        save_ranked_titles(new_titles)
+
+    if trending_topics:
+        print(f"✅ Loaded {len(trending_topics)} NEW trending ideas after filtering")
+    else:
+        print(f"⚠️ All Gemini ideas were repeats; fallback will be used")
+
+# Build mandatory trending section
+if trending_topics:
+    trending_mandate = f"""
+⚠️⚠️⚠️ CRITICAL MANDATORY REQUIREMENT ⚠️⚠️⚠️
+
+YOU MUST CREATE A SCRIPT ABOUT ONE OF THESE REAL TRENDING GARDENING TOPICS:
+
+{chr(10).join(trending_summaries)}
+
+These are REAL trends from today ({datetime.now().strftime('%Y-%m-%d')}) collected from:
+- Google Trends (real gardening search data)
+- Gardening RSS feeds (latest headlines from Fine Gardening, Savvy Gardening, etc.)
+- Reddit gardening communities (r/gardening, r/houseplants, etc.)
+
+YOU MUST PICK ONE OF THE 5 TOPICS ABOVE. 
+DO NOT create content about anything else.
+DO NOT make up your own topic.
+USE THE EXACT TREND and expand it into a viral gardening script.
+
+If a trend is about "propagating pothos", your script MUST be about that specific plant propagation method.
+If a trend is about "tomato blight solutions", your script MUST be about that exact problem and solution.
+"""
+else:
+    trending_mandate = ""
+
+# 🌱 GARDENING-SPECIFIC PROMPT WITH TRENDING ENFORCEMENT
+prompt = f"""You are a viral gardening content creator with 20+ years of horticultural experience and millions of views.
+
+CONTEXT:
+- Current date: {datetime.now().strftime('%Y-%m-%d')}
+- Current month: {datetime.now().strftime('%B')} (consider seasonal planting)
+- Previously covered (DO NOT REPEAT THESE): 
+{chr(10).join(f"  • {t}" for t in previous_topics) if previous_topics else '  None'}
+
+{trending_mandate}
+
+TASK: Create a trending, viral-worthy GARDENING script for a 45-75 second YouTube Short.
+
+CRITICAL REQUIREMENTS:
+
+✅ Focus on: Plant propagation, gardening hacks, pest solutions, container gardening, or seasonal planting
+✅ Topic must be COMPLETELY DIFFERENT from previous topics above
+✅ Hook must create INSTANT value or curiosity (Stop buying plants when... / This banana peel trick...)
+✅ Include SPECIFIC plant names, measurements, or timeframes (not some fertilizer but 2 tablespoons Epsom salt)
+✅ Use exact numbers and timelines (7 days not a few days, 1 inch not a small piece)
+✅ Make it actionable - viewers should be able to DO this TODAY with items they have
+✅ Avoid generic advice - be hyper-specific about methods
+✅ CTA must be casual, helpful (Try this with celery next... not Subscribe...)
+✅ Add 5-10 relevant hashtags including #gardening #planttok #shorts
+
+CONTENT PILLARS (PICK ONE - BASED ON TRENDING SEARCHES):
+1. **Orchid Care & Secrets (20%)** 🔥 HIGH DEMAND
+   - "The secret to making orchids bloom nonstop"
+   - "What to do with orchid aerial roots"
+   - "Why your orchid won't bloom (and the fix)"
+   - "Orchid ice cube watering trick that works"
+
+2. **Raised Bed Gardening (20%)** 🔥 HIGH DEMAND
+   - "7 raised bed gardening hacks pros use"
+   - "Raised bed soil mixture that never fails"
+   - "Maximize raised bed space: 3 secrets"
+   - "Best vegetables for raised beds"
+
+3. **Myth Busting & Testing (15%)** 🔥 VIRAL POTENTIAL
+   - "Testing grow a garden myths you believed"
+   - "Does Epsom salt really work for tomatoes?"
+   - "Debunking 5 common gardening myths"
+   - "I tested viral TikTok garden hacks"
+
+4. **Must-Grow Plants (15%)** 🔥 LIST FORMAT
+   - "9 plants you should always grow"
+   - "Top 5 easiest vegetables for beginners"
+   - "3 plants that pay for themselves"
+   - "Perennials that come back year after year"
+
+5. **Creative Gardening Ideas (10%)**
+   - "Creative gardening ideas under $20"
+   - "DIY vertical garden from pallets"
+   - "Container garden combos that stun"
+   - "Upcycle these into planters"
+
+6. **Homestead & Self-Sufficiency (10%)**
+   - "Homestead gardening tips for beginners"
+   - "Grow 80% of your food in your backyard"
+   - "Preserve your harvest: 3 easy methods"
+   - "Seed saving for next year's garden"
+
+7. **Plant Propagation & Growing (10%)**
+   - Propagate in water, soil, or division
+   - Grow from kitchen scraps
+   - Turn cuttings into plants
+   - Free plant multiplication
+
+PROVEN VIRAL FORMULAS (BASED ON TRENDING SEARCHES):
+- "Regrow [Plant] From [Unexpected Source]"
+- "Stop [Mistake] - Do This Instead"
+- "This [Ingredient] Trick [Amazing Result]"
+- "3 Signs Your [Plant] Is [Problem] (Fix It Now)"
+- "Grow [Plant] in [Small Space/Container]"
+- "[Number] Plants You Should Always Grow"
+- "The Secret to Making Your [Plant] [Result]"
+
+CTA GUIDELINES:
+❌ BAD: Comment which one..., Subscribe for more, Click the link
+✅ GOOD: Try this with celery next, Save this before planting season, Tag me when yours sprouts
+
+🔥 **HIGH-DEMAND TOPICS:**
+- "The Secret to Making Your [Plant] [Result]" - orchids bloom nonstop, roses thrive
+- "[Number] [Category] Hacks" - 7 raised bed hacks, 5 composting tricks
+- "What to Do With [Plant Problem]" - orchid aerial roots, yellow leaves, leggy seedlings
+- "Testing [Garden Myths/Hacks]" - TikTok trends, old wives' tales
+- "[Number] Plants You Should Always Grow" - must-haves, never fails
+- "[Category] Gardening Tips" - homestead tips, beginner tips, budget tips
+
+🌱 **PROVEN FORMULAS:**
+- "Regrow [Plant] From [Unexpected Source]" - grocery store scraps, kitchen waste
+- "Stop [Mistake] - Do This Instead" - watering errors, fertilizing mistakes
+- "This [Ingredient] Trick [Amazing Result]" - banana peels triple tomato harvest
+- "3 Signs Your [Plant] Is [Problem] (Fix It Now)" - yellowing leaves, root rot
+- "Grow [Plant] in [Small Space/Container]" - 50 pounds of potatoes in bucket
+- "Why [Gardeners] Never [Common Practice]" - pros avoid top watering
+- "Creative [Gardening] Ideas Under $[Budget]" - DIY projects, upcycling
+
+SPECIFICITY RULES (VERY IMPORTANT):
+DO NOT INCLUDE SPECIAL CHARACTERS OR QUOTES IN THE OUTPUT
+
+❌ VAGUE: This fertilizer trick works wonders
+✅ SPECIFIC: Mix 2 tablespoons Epsom salt per gallon of water for tomatoes
+
+❌ VAGUE: Cut the plant and place in water
+✅ SPECIFIC: Cut 4-6 inch stem below a node and place in filtered water
+
+❌ VAGUE: Wait a few days for roots
+
+✅ SPECIFIC: Roots appear in 7-10 days with daily water changes
 
 
-def get_real_gardening_trends() -> List[str]:
-    """Combine multiple FREE sources for real gardening trending topics"""
-    
-    print("\n" + "="*60)
-    print("🌱 FETCHING REAL-TIME GARDENING TRENDS (FREE SOURCES)")
-    print("="*60)
-    
-    all_trends = []
-    
-    # Source 1: Google Trends (gardening-specific)
-    google_trends = get_google_trends_gardening()
-    all_trends.extend(google_trends)
-    
-    # Source 2: Gardening News RSS
-    gardening_news = get_gardening_news_rss()
-    all_trends.extend(gardening_news)
-    
-    # Source 3: Reddit Gardening Communities
-    reddit_trends = get_reddit_gardening_trends()
-    all_trends.extend(reddit_trends)
-    
-    # Deduplicate and prioritize
-    seen = set()
-    unique_trends = []
-    for trend in all_trends:
-        trend_clean = trend.lower().strip()
-        if trend_clean not in seen and len(trend) > 10:
-            seen.add(trend_clean)
-            unique_trends.append(trend)
-    
-    print(f"\n📊 Total unique gardening trends found: {len(unique_trends)}")
-    
-    return unique_trends[:25]  # Return top 25
 
+❌ VAGUE: Plant in spring
+✅ SPECIFIC: Plant tomatoes outdoors after last frost in mid-May
 
-def filter_and_rank_gardening_trends(trends: List[str], user_query: str) -> List[Dict[str, str]]:
-    """Use Gemini to filter and rank gardening trends for viral potential"""
-    
-    if not trends:
-        print("⚠️ No trends to filter, using fallback...")
-        return get_fallback_gardening_ideas()
-    
-    print(f"\n🤖 Using Gemini to rank {len(trends)} real gardening trends for viral potential...")
-    
-    # Define the structure for the JSON output
-    response_schema = {
-        "type": "OBJECT",
-        "properties": {
-            "selected_topics": {
-                "type": "ARRAY",
-                "items": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "title": {"type": "STRING"},
-                        "reason": {"type": "STRING"},
-                        "viral_score": {"type": "NUMBER"}
-                    }
-                },
-                "description": "Top 5 gardening topics ranked by viral potential"
-            }
-        },
-        "required": ["selected_topics"]
-    }
-    
-    current_month = time.strftime('%B')
-    
-    prompt = f"""You are a viral gardening content strategist. Here are REAL trending gardening topics from today:
-
-REAL TRENDING GARDENING TOPICS (from Google Trends, RSS, Reddit):
-{chr(10).join(f"{i+1}. {t}" for i, t in enumerate(trends[:25]))}
-
-CURRENT MONTH: {current_month}
-
-TASK: Select the TOP 5 topics that would make the MOST VIRAL YouTube Shorts for gardeners.
-
-SELECTION CRITERIA:
-✅ Must be surprising, helpful, or solve a common problem
-✅ Must have visual transformation potential for short-form video
-✅ Must be currently trending (these are all real trends from today)
-✅ Must appeal to home gardeners, plant parents, or urban farmers
-✅ Must have "wow factor" - quick results, dramatic before/after, or mind-blowing hacks
-✅ Prefer specific plant names and actionable techniques over general advice
-
-FOCUS AREAS: {user_query}
-
-OUTPUT FORMAT (JSON ONLY):
+OUTPUT FORMAT (JSON ONLY - NO OTHER TEXT):
 {{
-  "selected_topics": [
-    {{
-      "title": "Specific catchy title with plant names or technique",
-      "reason": "Why gardeners will love this and share it",
-      "viral_score": 95
-    }}
+  "title": "Specific, value-driven title with plant names (under 100 chars)",
+  "topic": "gardening",
+  "hook": "Immediate value or problem statement with specifics (under 12 words)",
+  "bullets": [
+    "First step - SPECIFIC with plant name, measurement, or timeline (15-20 words)",
+    "Second step - SPECIFIC with plant name, measurement, or timeline (15-20 words)",
+    "Third step - SPECIFIC with plant name, measurement, or timeline (15-20 words)"
+  ],
+  "cta": "Natural, helpful next step (under 15 words)",
+  "hashtags": ["#gardening", "#planttok", "#gardentips", "#urbanfarming", "#shorts"],
+  "description": "2-3 sentences with specific plant names and searchable keywords for YouTube",
+  "visual_prompts": [
+    "Vibrant close-up of healthy plant or garden scene for hook, natural lighting, macro photography",
+    "Hands demonstrating step 1 with clear plant detail, close-up, natural outdoor setting",
+    "Close-up of step 2 showing growth or technique, macro shot, bright natural light",
+    "Final result showing thriving plant or harvest, satisfaction shot, vibrant colors"
   ]
 }}
 
-GOOD EXAMPLES:
-- "Propagate Pothos in 7 Days: The Paper Towel Trick"
-- "Regrow Romaine Lettuce Forever From One Head"
-- "Kill Spider Mites in 24 Hours With This Kitchen Ingredient"
+EXAMPLES OF GOOD GARDENING SCRIPTS:
 
-Select 5 topics, ranked by viral_score (highest first)."""
+Example 1:
+{{
+  "title": "Regrow Green Onions Forever From Grocery Store Scraps",
+  "topic": "gardening",
+  "hook": "Stop buying green onions when you can regrow them infinitely for free",
+  "bullets": [
+    "Cut the bottom one inch off store bought green onions with roots intact and place in a glass with water",
+    "Change the water every two to three days and keep on a sunny windowsill for optimal photosynthesis and growth",
+    "Harvest the green tops after seven days and they regrow continuously giving you free green onions forever"
+  ],
+  "cta": "Try this with celery and romaine lettuce next - same exact method works",
+  "hashtags": ["#gardening", "#foodwaste", "#urbangarden", "#gardenhacks", "#shorts"]
+}}
 
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            response = model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    response_mime_type="application/json",
-                    response_schema=response_schema
-                )
-            )
-            
-            result_text = response.text.strip()
-            
-            # Extract JSON if wrapped
-            import re
-            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', result_text, re.DOTALL)
+Example 2:
+{{
+  "title": "Eggshells Plus Coffee Grounds: The Ultimate Free Fertilizer",
+  "topic": "gardening",
+  "hook": "This kitchen waste combo makes plants grow twice as fast",
+  "bullets": [
+    "Crush five eggshells into small pieces and mix with two tablespoons of used coffee grounds in a mason jar",
+    "Add one gallon of water and let steep for 48 hours to extract calcium and nitrogen nutrients",
+    "Pour diluted mixture around tomato and pepper plants every two weeks for explosive growth and bigger yields"
+  ],
+  "cta": "Save your eggshells starting today - your plants will thank you",
+  "hashtags": ["#gardening", "#composting", "#organicgarden", "#gardenhacks", "#shorts"]
+}}
+
+REMEMBER: 
+- YOU MUST USE ONE OF THE 5 TRENDING GARDENING TOPICS PROVIDED ABOVE!
+- Be SPECIFIC with plant names, measurements, and timeframes!
+- Make it COMPLETELY DIFFERENT from previous topics!
+- Make it so valuable viewers NEED to save and try it!
+- Focus on what viewers can DO TODAY with what they have!"""
+
+# Try generating script with multiple attempts
+max_attempts = 5
+attempt = 0
+
+while attempt < max_attempts:
+    try:
+        attempt += 1
+        print(f"🌱 Generating viral gardening script from REAL trends (attempt {attempt}/{max_attempts})...")
+        
+        raw_text = generate_script_with_retry(prompt)
+        print(f"🔍 Raw output length: {len(raw_text)} chars")
+        
+        # Extract JSON
+        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw_text, re.DOTALL)
+        if json_match:
+            json_text = json_match.group(1)
+            print("✅ Extracted JSON from code block")
+        else:
+            json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
             if json_match:
-                result_text = json_match.group(1)
-            
-            data = json.loads(result_text)
-            
-            # Convert to expected format
-            trending_ideas = []
-            for item in data.get('selected_topics', [])[:5]:
-                trending_ideas.append({
-                    "topic_title": item.get('title', 'Unknown'),
-                    "summary": item.get('reason', 'High viral potential for gardeners'),
-                    "category": "Gardening",
-                    "viral_score": item.get('viral_score', 90)
-                })
-            
-            print(f"✅ Gemini ranked {len(trending_ideas)} viral gardening topics from real trends")
-            return trending_ideas
-            
-        except Exception as e:
-            print(f"❌ Attempt {attempt + 1} failed: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
-    
-    # Fallback: Just use first 5 trends
-    print("⚠️ Gemini ranking failed, using raw trends...")
-    return [
-        {
-            "topic_title": trend,
-            "summary": "Currently trending in gardening community",
-            "category": "Gardening"
-        }
-        for trend in trends[:5]
-    ]
-
-
-def get_fallback_gardening_ideas() -> List[Dict[str, str]]:
-    """Fallback gardening ideas if all methods fail"""
-    current_month = time.strftime('%B')
-    return [
-        {
-            "topic_title": "Propagate Snake Plants in Water: Zero-Fail Method",
-            "summary": "Easy propagation technique perfect for beginners wanting to multiply their houseplants for free",
-            "category": "Propagation"
-        },
-        {
-            "topic_title": "Regrow Lettuce Forever From One Grocery Store Head",
-            "summary": "Kitchen scrap gardening hack that gives you infinite salad from one purchase",
-            "category": "Food Waste"
-        },
-        {
-            "topic_title": "Coffee Grounds + Banana Peels: The Ultimate Free Fertilizer",
-            "summary": "Turn kitchen waste into powerful plant food that rivals expensive fertilizers",
-            "category": "Soil Health"
-        },
-        {
-            "topic_title": f"What to Plant in {current_month} for Maximum Harvest",
-            "summary": f"Seasonal planting guide for {current_month} to optimize your garden's productivity",
-            "category": "Seasonal"
-        },
-        {
-            "topic_title": "Kill Fungus Gnats in 24 Hours: Hydrogen Peroxide Trick",
-            "summary": "Fast, natural solution to the most annoying houseplant pest using household items",
-            "category": "Pest Control"
-        }
-    ]
-
-
-if __name__ == "__main__":        
-    # 🌱 Gardening-focused topic query
-    topic_focus = "Gardening tips, plant propagation, container gardening, urban farming, composting, pest control, vegetable growing, herb gardens, flower care, seasonal planting guides, garden hacks, indoor plants, houseplant care, regrow from scraps for Ultra Engaging Youtube Shorts"
-    
-    # Get real trending gardening topics from free sources
-    real_trends = get_real_gardening_trends()
-    
-    if real_trends:
-        # Use Gemini to filter and rank for viral potential
-        trending_ideas = filter_and_rank_gardening_trends(real_trends, topic_focus)
-    else:
-        print("⚠️ Could not fetch real gardening trends, using fallback...")
-        trending_ideas = get_fallback_gardening_ideas()
-    
-    if trending_ideas:
-        print(f"\n" + "="*60)
-        print(f"🌱 TOP VIRAL GARDENING IDEAS (FROM REAL DATA)")
-        print("="*60)
+                json_text = json_match.group(0)
+                print("✅ Extracted JSON directly")
+            else:
+                raise ValueError("No JSON found in response")
         
-        for i, idea in enumerate(trending_ideas):
-            print(f"\nIdea {i + 1}:")
-            print(f"  Title: {idea['topic_title']}")
-            print(f"  Category: {idea['category']}")
-            print(f"  Summary: {idea['summary']}")
-            if 'viral_score' in idea:
-                print(f"  Viral Score: {idea['viral_score']}/100")
+        data = json.loads(json_text)
         
-        # Save to file for use by other scripts
-        trending_data = {
-            "topics": [idea["topic_title"] for idea in trending_ideas],
-            "full_data": trending_ideas,
-            "generated_at": time.time(),
-            "query": topic_focus,
-            "niche": "gardening",
-            "source": "google_trends + gardening_rss + reddit + gemini_ranking"
-        }
+        # Validate required fields
+        required_fields = ["title", "topic", "hook", "bullets", "cta"]
+        for field in required_fields:
+            if field not in data:
+                raise ValueError(f"Missing required field: {field}")
         
-        trending_file = os.path.join(TMP, "trending.json")
-        with open(trending_file, "w") as f:
-            json.dump(trending_data, f, indent=2)
+        # ✅ VALIDATE: Check if script actually uses one of the trending gardening topics
+        if trending_topics:
+            script_text = f"{data['title']} {data['hook']} {' '.join(data['bullets'])}".lower()
+            
+            # Check if ANY trending topic keyword appears in the script
+            trend_keywords = []
+            for topic in trending_topics:
+                # Extract key words from trending topic (remove common words)
+                words = [w for w in topic.lower().split() if len(w) > 4 and w not in [
+                    'this', 'that', 'with', 'from', 'will', 'just', 'grow', 'plant',
+                    'your', 'the', 'how', 'best', 'easy', 'tips', 'guide'
+                ]]
+                trend_keywords.extend(words)
+            
+            # Check if at least 2 trending keywords appear
+            matches = sum(1 for kw in trend_keywords if kw in script_text)
+            
+            if matches < 2:
+                print(f"⚠️ Script doesn't use trending gardening topics! Only {matches} keyword matches.")
+                print(f"   Trending keywords: {trend_keywords[:10]}")
+                print(f"   Script text: {script_text[:200]}...")
+                raise ValueError("Script ignores trending topics - regenerating...")
         
-        print(f"\n💾 Saved trending gardening data to: {trending_file}")
-        print(f"🌿 Data sources: Google Trends (Gardening) + RSS Feeds + Reddit (100% FREE)")
-    else:
-        print("\n❌ Could not retrieve any trending gardening ideas.")
+        # Force topic to be gardening
+        data["topic"] = "gardening"
+        
+        # Add optional fields with defaults
+        if "hashtags" not in data:
+            data["hashtags"] = ["#gardening", "#planttok", "#gardenhacks", "#urbangarden", "#shorts"]
+        
+        if "description" not in data:
+            data["description"] = f"{data['title']} - {data['hook']} #gardening #planttips #shorts"
+        
+        if "visual_prompts" not in data or len(data["visual_prompts"]) < 4:
+            data["visual_prompts"] = [
+                f"Vibrant garden scene or plant close-up for: {data['hook']}, natural lighting, macro photography, lush green",
+                f"Hands working with plants demonstrating: {data['bullets'][0]}, close-up, outdoor setting, natural light",
+                f"Plant growth or technique showing: {data['bullets'][1]}, macro detail, bright natural lighting",
+                f"Thriving plant or harvest result: {data['bullets'][2]}, satisfaction shot, vibrant colors, healthy growth"
+            ]
+        
+        if not isinstance(data["bullets"], list) or len(data["bullets"]) < 3:
+            raise ValueError("bullets must be a list with at least 3 items")
+        
+        # Check for duplicates
+        content_hash = get_content_hash(data)
+        if content_hash in [t.get('hash') for t in history['topics']]:
+            print("⚠️ Generated duplicate content (exact match), regenerating...")
+            raise ValueError("Duplicate content detected")
+        
+        # Check for similar topics
+        if is_similar_topic(data['title'], previous_titles):
+            print("⚠️ Topic too similar to previous, regenerating...")
+            raise ValueError("Similar topic detected")
+        
+        # Success! Save to history
+        save_to_history(data['topic'], content_hash, data['title'])
+        
+        print("✅ Gardening script generated successfully from REAL trending data")
+        print(f"   Title: {data['title']}")
+        print(f"   Topic: {data['topic']}")
+        print(f"   Hook: {data['hook']}")
+        print(f"   Hashtags: {', '.join(data['hashtags'][:5])}")
+        
+        break  # Success, exit loop
+        
+    except Exception as e:
+        print(f"❌ Attempt {attempt} failed: {e}")
+        
+        if attempt >= max_attempts:
+            print("⚠️ Max attempts reached, using gardening fallback script...")
+            data = {
+                "title": "Regrow Green Onions Forever From Grocery Store Scraps",
+                "topic": "gardening",
+                "hook": "Stop buying green onions when you can regrow them infinitely for free",
+                "bullets": [
+                    "Cut the bottom one inch off store bought green onions with roots intact and place in a glass with water",
+                    "Change the water every two to three days and keep on a sunny windowsill for optimal photosynthesis and growth",
+                    "Harvest the green tops after seven days and they regrow continuously giving you free green onions forever"
+                ],
+                "cta": "Try this with celery and romaine lettuce next - same exact method works",
+                "hashtags": ["#gardening", "#foodwaste", "#urbangarden", "#gardenhacks", "#shorts"],
+                "description": "Regrow green onions infinitely from grocery store scraps. Cut bottom inch with roots, place in water, change water every 2-3 days. Harvest tops after 7 days for continuous free green onions. #gardening #foodwaste #planttok",
+                "visual_prompts": [
+                    "Fresh green onions on wooden cutting board next to clear glass of water, bright kitchen setting, natural morning light, vibrant colors",
+                    "Hands cutting bottom inch of green onion showing white roots, close-up macro photography, sharp focus on roots and bulb detail",
+                    "Green onion roots in clear glass with water on sunny windowsill, growth progress visible, time-lapse style, condensation on glass",
+                    "Fully regrown green onions being harvested with kitchen scissors, vibrant green tops, satisfaction shot, abundant growth"
+                ]
+            }
+            
+            # Save fallback to history too
+            fallback_hash = get_content_hash(data)
+            save_to_history(data['topic'], fallback_hash, data['title'])
+
+# Save script to file
+os.makedirs(TMP, exist_ok=True)
+script_path = os.path.join(TMP, "script.json")
+
+with open(script_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+
+print(f"✅ Saved gardening script to {script_path}")
+print(f"📊 Total topics in history: {len(history['topics'])}")
+print(f"📝 Script preview:")
+print(f"   Title: {data['title']}")
+print(f"   Bullets: {len(data['bullets'])} points")
+print(f"   Visual prompts: {len(data['visual_prompts'])} images")
+
+if trending:
+    print(f"\n🌐 Source: {trending.get('source', 'Unknown')}")
+    print(f"   Trending gardening topics used: {', '.join(trending_topics[:3])}...")

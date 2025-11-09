@@ -7,6 +7,67 @@ from datetime import datetime
 import google.generativeai as genai
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+def normalize_topic(topic: str) -> str:
+    """Normalize topic for semantic comparison"""
+    topic = topic.lower().strip()
+    
+    fillers = [
+        'how to', 'guide to', 'tips for', 'best way to', 'easy way to',
+        'simple', 'ultimate', 'complete', 'beginner', 'advanced', 
+        'quick', 'fast', 'easy', 'diy', 'the', 'a', 'an',
+        'your', 'my', 'this', 'that', 'with', 'for', 'and', 'or',
+        'ways to', 'methods for', 'tricks for', 'hacks for'
+    ]
+    
+    for filler in fillers:
+        topic = topic.replace(filler, '')
+    
+    topic = re.sub(r'[^\w\s]', '', topic)
+    topic = ' '.join(topic.split())
+    
+    return topic
+
+
+def extract_core_keywords(topic: str) -> set:
+    """Extract core meaningful words from a topic"""
+    normalized = normalize_topic(topic)
+    words = normalized.split()
+    
+    stopwords = {
+        'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 
+        'do', 'does', 'did', 'will', 'would', 'should', 'could', 'may', 'might',
+        'can', 'from', 'in', 'on', 'at', 'by', 'about', 'like', 'through',
+        'garden', 'gardening', 'plant', 'plants', 'grow', 'growing'
+    }
+    
+    keywords = {w for w in words if len(w) > 2 and w not in stopwords}
+    return keywords
+
+
+def are_topics_duplicate_semantic(topic1: str, topic2: str, threshold: float = 0.65) -> bool:
+    """
+    Check if two topics are semantically duplicate
+    Uses threshold of 0.65 (stricter than fetch_trending)
+    """
+    norm1 = normalize_topic(topic1)
+    norm2 = normalize_topic(topic2)
+    
+    if norm1 == norm2:
+        return True
+    
+    kw1 = extract_core_keywords(topic1)
+    kw2 = extract_core_keywords(topic2)
+    
+    if not kw1 or not kw2:
+        return False
+    
+    intersection = len(kw1 & kw2)
+    union = len(kw1 | kw2)
+    
+    similarity = intersection / union if union > 0 else 0
+    
+    return similarity >= threshold
+
 TMP = os.getenv("GITHUB_WORKSPACE", ".") + "/tmp"
 
 os.makedirs(TMP, exist_ok=True)
@@ -161,16 +222,16 @@ if trending and trending.get('topics'):
         if not title:
             continue
 
-        title_lower = title.lower()
-
-        # 🧠 Compare against previously used topics
-        too_similar = any(
-            len(set(title_lower.split()) & set(prev.split())) / len(set(title_lower.split()) | set(prev.split())) > 0.55
-            for prev in used_titles
-        )
-
-        if too_similar:
-            print(f"⚠️ Skipping repeated or similar idea: '{title}'")
+        # ✨ NEW: Use semantic duplicate checking
+        too_similar_to_used = False
+        for used in used_titles:
+            if are_topics_duplicate_semantic(title, used, threshold=0.60):
+                print(f"⚠️ Skipping semantically similar to used: '{title}'")
+                print(f"                                      ≈ '{used}'")
+                too_similar_to_used = True
+                break
+        
+        if too_similar_to_used:
             continue
 
         trending_topics.append(title)
@@ -179,7 +240,7 @@ if trending and trending.get('topics'):
 
     if new_titles:
         save_ranked_titles(new_titles)
-
+        
     if trending_topics:
         print(f"✅ Loaded {len(trending_topics)} NEW trending ideas after filtering")
     else:

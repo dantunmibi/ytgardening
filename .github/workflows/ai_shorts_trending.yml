@@ -23,7 +23,6 @@ on:
   # WAT = UTC+1, so subtract 1 hour from WAT time to get UTC
   
   # Monday: 6 PM WAT, 8 PM WAT
-  - cron: '0 17 * * 1'    # 6 PM WAT = 5 PM UTC
   - cron: '0 19 * * 1'    # 8 PM WAT = 7 PM UTC
   
   # Tuesday: 12 PM WAT (HIGH), 6:30 PM WAT
@@ -31,25 +30,20 @@ on:
   - cron: '0 17 * * 2'    # 6:30 PM WAT = 5:30 PM UTC
   
   # Wednesday: 4 PM WAT (BEST WEEKDAY), 7 PM WAT
-  - cron: '0 15 * * 3'    # 4 PM WAT = 3 PM UTC
   - cron: '0 18 * * 3'    # 7 PM WAT = 6 PM UTC
   
   # Thursday: 5 PM WAT, 7:30 PM WAT
-  - cron: '0 16 * * 4'    # 5 PM WAT = 4 PM UTC
   - cron: '0 18 * * 4'    # 7:30 PM WAT = 6:30 PM UTC
   
   # Friday: 5 PM WAT, 7 PM WAT
   - cron: '0 16 * * 5'    # 5 PM WAT = 4 PM UTC
-  - cron: '0 18 * * 5'    # 7 PM WAT = 6 PM UTC
   
   # Saturday: 9 AM WAT (PRIME), 2 PM WAT, 6 PM WAT
   - cron: '0 3 * * 6'     # 9 AM WAT = 8 AM UTC - PRIME TIME
-  - cron: '0 10 * * 6'    # 2 PM WAT = 1 PM UTC
   
   
   # Sunday: 10 AM WAT (SECOND BEST), 3 PM WAT, 7 PM WAT
   - cron: '0 14 * * 0'    # 3 PM WAT = 2 PM UTC
-  - cron: '0 18 * * 0'    # 7 PM WAT = 6 PM UTC
 
 jobs:
   build_and_upload:

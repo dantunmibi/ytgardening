@@ -22,10 +22,10 @@ AUDIO_METADATA = os.path.join(TMP, "audio_metadata.json")
 # ===== OPTIMIZED MODEL CONFIGURATION (BASED ON RESEARCH) =====
 # Primary: VCTK-VITS is fastest and highest quality for YouTube Shorts
 PRIMARY_MODEL = "tts_models/en/vctk/vits"
-PRIMARY_SPEAKER = "p225"  # Female, clear American accent
+PRIMARY_SPEAKER = "p330"  # Female, clear American accent
 
 # Alternative speakers (if primary fails or for variety)
-ALT_VCTK_SPEAKERS = ["p230", "p273", "p330", "p234"]  # Mix of male/female, American/British
+ALT_VCTK_SPEAKERS = ["p230", "p273", "p225", "p234"]  # Mix of male/female, American/British
 
 # Fallback models (in order of preference)
 FALLBACK_MODELS = [

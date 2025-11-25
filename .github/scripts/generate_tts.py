@@ -172,22 +172,22 @@ def generate_silent_audio_fallback(text: str, out_path: str) -> str:
 # -------------------------
 def _tts_to_file(tts_obj, text: str, out_path: str, speaker: str = None):
     """
-    Robust wrapper around TTS.tts_to_file with speaker support
+    Robust wrapper around TTS.tts_to_file with proper speaker support.
+    Handles both single-speaker and multi-speaker models.
     """
     try:
-        if speaker:
-            # Try with speaker parameter
+        # Check if the model supports multi-speaker
+        if speaker and getattr(tts_obj, "speakers", None):
+            # Use 'speaker' argument (string), not speaker_idx
             try:
-                tts_obj.tts_to_file(text=text, file_path=out_path, speaker_idx=speaker)
+                tts_obj.tts_to_file(text=text, file_path=out_path, speaker=speaker)
                 return
             except TypeError:
-                # Model doesn't support speaker_idx, try without
-                logging.info("   (Model doesn't support speaker selection, using default)")
-                pass
+                logging.info("   (Model does not support 'speaker', using default voice)")
         
-        # Fallback: no speaker parameter
+        # Fallback: no speaker argument
         tts_obj.tts_to_file(text=text, file_path=out_path)
-        
+
     except Exception as e:
         logging.error(f"   TTS generation error: {e}")
         raise
@@ -209,41 +209,33 @@ def generate_sectional_tts():
         logging.info(f"🔊 Loading PRIMARY model: {PRIMARY_MODEL}")
         tts = TTS(model_name=PRIMARY_MODEL, progress_bar=False)
         
-        # Verify speaker support
+        # Verify speakers
         available_speakers = getattr(tts, "speakers", None)
-        use_speaker = False
         selected_speaker = PRIMARY_SPEAKER
-        
+
         if available_speakers:
-            if PRIMARY_SPEAKER in available_speakers:
-                use_speaker = True
-                logging.info(f"   ✅ Using speaker: {PRIMARY_SPEAKER}")
-            else:
-                # Try alternative speakers
-                for alt_speaker in ALT_VCTK_SPEAKERS:
-                    if alt_speaker in available_speakers:
-                        use_speaker = True
-                        selected_speaker = alt_speaker
-                        logging.info(f"   ✅ Using alternative speaker: {alt_speaker}")
+            if PRIMARY_SPEAKER not in available_speakers:
+                # Try alternatives
+                for alt in ALT_VCTK_SPEAKERS:
+                    if alt in available_speakers:
+                        selected_speaker = alt
+                        logging.info(f"   ✅ Using alternative speaker: {alt}")
                         break
-                
-                if not use_speaker:
-                    logging.info(f"   ⚠️ No preferred speakers available, using default")
-        
-        # Generate each section
+                else:
+                    logging.info("   ⚠️ No preferred speakers found, using default model voice")
+        else:
+            logging.info("   ℹ️ Model is single-speaker, using default voice")
+
+        # Generate sections
         for name, text in sections:
             if not text.strip():
                 continue
             
             clean = clean_text_for_tts(text)
             out_path = os.path.join(TMP, f"{name}.mp3")
-            
             logging.info(f"🎧 Generating '{name}' ({len(clean)} chars)")
             
-            if use_speaker:
-                _tts_to_file(tts, clean, out_path, speaker=selected_speaker)
-            else:
-                _tts_to_file(tts, clean, out_path)
+            _tts_to_file(tts, clean, out_path, speaker=selected_speaker)
             
             if os.path.exists(out_path) and os.path.getsize(out_path) > 1024:
                 section_paths.append(out_path)
@@ -251,11 +243,10 @@ def generate_sectional_tts():
             else:
                 raise Exception(f"Section file invalid: {out_path}")
 
-        # Combine sections with pauses
+        # Combine sections
         combined = AudioSegment.silent(duration=0)
         for i, path in enumerate(section_paths):
             part = AudioSegment.from_file(path)
-            # 250ms pause between sections (gardening content benefits from slightly longer pauses)
             pause_ms = 250 if i < len(section_paths) - 1 else 0
             combined += part + AudioSegment.silent(duration=pause_ms)
 
@@ -265,6 +256,7 @@ def generate_sectional_tts():
 
     except Exception as primary_err:
         logging.warning(f"⚠️ PRIMARY model failed: {primary_err}")
+
 
     # ===== TRY FALLBACK MODELS =====
     for fallback_model in FALLBACK_MODELS:
